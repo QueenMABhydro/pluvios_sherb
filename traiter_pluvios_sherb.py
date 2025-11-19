@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Nov 18 15:45:46 2025
+
+Fonctions pour traiter les donnees brutes des precipitometres de la 
+Ville de Sherbrooke.
+- "ajoute_manquantes": Ajouter explicitement les donnees manquantes
+- "filtre_precip_louche": filtrer les valeurs qui semblent aberrantes
+(avant de coder cette fonction, verifier si le code existe deja)
+
+@author: Marie-Amelie Boucher, USherbrooke
+"""
+
+import pandas as pd
+import numpy as np
+
+
+def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pas_temps):
+    """
+    Parameters
+    ----------
+    fichier_o : chaine de caracteres
+        nom du fichier original (pour une station). format csv
+    fichier_modif : chaine de caracteres
+        nom du fichier de destination (pour une station, AVEC les dates 
+                                       manquantes ajoutees). format csv
+    date_debut : chaine de caracteres
+        Date de debut de la periode d'interet. Exemple: '2018-01-01'
+    date_fin : chaine de caracteres
+        Date de fin de la periode d'interet. Exemple: '2018-12-31'
+    pas_temps : chaine de caracteres
+        Pas de temps a utiliser dans le fichier de destination. Exemple: 'D' pour 
+        la journee. La liste des frequences possibles est ici: 
+        https://pandas.pydata.org/pandas-docs/stable/user_guide/timeseries.html#timeseries-offset-aliases
+
+    Returns
+    -------
+    donnees_pluvio_complet: data frame (transformer en csv??) contenant une serie 
+    complete dans laquelle les donnees manquantes sont identifiees par des NaN
+
+    """
+       
+    # importer les donnees brutes du pluvio en dataframe (Pandas).
+    # l'option "parse_dates=[0]" est importante. Ca dit explicitement 
+    # a Python de considerer la premiere colonne comme des dates
+
+    donnees_pluvio = pd.read_csv(fichier_o, sep=',', parse_dates=[0], index_col=0)
+    
+    # construire une colonne d'index qui contient toutes les dates entre date_debut et date_fin,
+    # avec la frequence voulue (ex. journalier, horaire, etc)
+    idx = pd.date_range(start=date_debut , end=date_fin, freq = pas_temps)
+    
+    # utiliser la fonction reindex pour remplacer les dates manquantes par des nan
+    donnees_pluvio_complet = donnees_pluvio.reindex(idx, fill_value=np.nan)
+    
+    
+    return donnees_pluvio_complet
+    
+    
