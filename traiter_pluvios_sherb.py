@@ -21,40 +21,30 @@ def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pas_temps)
     Parameters
     ----------
     fichier_o : chaine de caracteres
-        nom du fichier original (pour une station). format csv
+        Chemin vers le fichier .csv des donnees brutes des pluviometres
+        Telecharger sur le site de la ville de Sherbrooke: https://pluviometres.ville.sherbrooke.qc.ca/
+        *Le Excel provenant du site est .xls et doit etre change pour .csv prealablement
     fichier_modif : chaine de caracteres
-        nom du fichier de destination (pour une station, AVEC les dates 
-                                       manquantes ajoutees). format csv
+        Chemin et nom du fichier de destination (AVEC les dates manquantes ajoutees). format csv
     date_debut : chaine de caracteres
         Date de debut de la periode d'interet. Exemple: '2018-01-01'
     date_fin : chaine de caracteres
         Date de fin de la periode d'interet. Exemple: '2018-12-31'
     pas_temps : chaine de caracteres
-        Pas de temps a utiliser dans le fichier de destination. Exemple: 'D' pour 
-        la journee. La liste des frequences possibles est ici: 
+        Pas de temps a utiliser dans le fichier de destination. Exemple: 5 minutes = '5min' 
+        La liste des frequences possibles est ici: 
         https://pandas.pydata.org/pandas-docs/stable/user_guide/timeseries.html#timeseries-offset-aliases
 
     Returns
     -------
-    donnees_pluvio_complet: data frame (transformer en csv??) contenant une serie 
-    complete dans laquelle les donnees manquantes sont identifiees par des NaN
-
+    donnees_pluvio_complet: data frame (Enregistre en format csv) 
+        Contient une serie complete dans laquelle les donnees manquantes sont identifiees par des NaN
     """  
-    # importer les donnees brutes du pluvio en dataframe (Pandas).
-    # l'option "parse_dates=[0]" est importante. Ca dit explicitement 
-    # a Python de considerer la premiere colonne comme des dates
-    #donnees_pluvio = pd.read_csv(fichier_o, sep=',', parse_dates=[0], index_col=0)
-    # construire une colonne d'index qui contient toutes les dates entre date_debut et date_fin,
-    # avec la frequence voulue (ex. journalier, horaire, etc)
-    #idx = pd.date_range(start=date_debut , end=date_fin, freq = pas_temps)
-    # utiliser la fonction reindex pour remplacer les dates manquantes par des nan
-    #donnees_pluvio_complet = donnees_pluvio.reindex(idx, fill_value=np.nan)
-    #return donnees_pluvio_complet
     
-    df = pd.read_csv(fichier_o, sep=',')                                                #Lire fichier initial
+    df = pd.read_csv(fichier_o, sep=',')                                                #Lire donnees brutes
 
-    if str(df.iloc[-1, 0]).strip().upper() == "TOTAL":                                  #Enlever la derniere ligne du fichier
-        df = df.iloc[:-1]                                                               #Propre au site de la ville
+    if str(df.iloc[-1, 0]).strip().upper() == "TOTAL":                                  #Enlever la derniere ligne "TOTAL" du fichier
+        df = df.iloc[:-1]                                                               #Qui est propre au site de la ville de Sherbrooke
    
     df['Date'] = pd.to_datetime(df['Date'], format='%m/%d/%Y', errors='coerce')         #Mettre les dates en index
     df = df.set_index('Date')
@@ -63,13 +53,11 @@ def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pas_temps)
         df.index.date.astype(str) + ' ' + df['Période'].str.split(' à ').str[0])        #Inclure le temps a l'index
     df = df.drop(columns='Période')
     
-    grille_index = pd.date_range(start= date_debut , end= date_fin, freq= pas_temps)    #Index de la grille complete
+    serie_index = pd.date_range(start= date_debut , end= date_fin, freq= pas_temps)     #Index de la serie complete
 
-    donnees_pluvio_complet = pd.DataFrame(index=grille_index, columns=df.columns)       #Grille vide complete
+    donnees_pluvio_complet = pd.DataFrame(index =serie_index, columns=df.columns)       #Serie vide complete
     donnees_pluvio_complet.update(df)                                                   #Ajout des donnees des pluviometres
     
     donnees_pluvio_complet.to_csv(fichier_modif, sep=',')                               #Enregistrer le dataframe en .csv
     
     return donnees_pluvio_complet
-    
-    
