@@ -14,6 +14,7 @@ Ville de Sherbrooke.
 
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 
 
 def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pas_temps):
@@ -61,3 +62,48 @@ def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pas_temps)
     donnees_pluvio_complet.to_csv(fichier_modif, sep=',')                               #Enregistrer le dataframe en .csv
     
     return donnees_pluvio_complet
+
+
+def visualiser_grilles_csv(fichier):
+    """
+    Parameters
+    ----------
+    fichier : chemin (chaine de caracteres) vers le fichier csv des donnees krigees
+        Le fichier csv contient 6 colonnes, soient une colonne d'index sans titre
+        une colonne 'x' avec les longitudes en metres, une colonne 'y'
+        avec les latitudes en metres, une colonne 'z' avec les altitudes
+        en metres, une colonne 'estimation' avec les quantitees (absolues) de pluie
+        estimees par krigeage en mm, et une colonne 'variance' avec la variance du krigeage
+        en mm^2
+
+    Returns
+    -------
+    None.
+
+    """
+    # Preparation des donnees: ATTENTION, CETTE SECTION EST PROBABLEMENT 
+    # EVITABLE (EN TOUT OU EN PARTIE) SI ON FAIT DU MENAGE ET QU'ON ORGANISE MIEUX LES CODES'
+    donnees = pd.read_csv(fichier)
+    lon = donnees['x'].to_numpy()
+    lat = donnees['y'].to_numpy()
+    precip = donnees['estimation'].to_numpy()
+    
+    # creer la grille. Tres inefficace car la grille brute existe probablement quelque part
+    lon_tot=np.arange(lon[0],lon[len(lon)-1]+500, 500)
+    lat_tot=lat[0:33]
+    x, y = np.meshgrid(lon_tot, lat_tot)
+    
+    # faire un reshape de la precip 
+    precip_reshape= np.reshape(precip, (len(lon_tot),len(lat_tot)) ) 
+    precip_reshape=np.transpose(precip_reshape)
+
+    # ----------- FIN DE LA SECTION QUI SERA PROBABLEMENT A MODIFIER APRES MENAGE
+
+    # Tracer la grille. Il faudrait ajouter pluviometres, et peut-etre carte
+    plt.pcolormesh(x, y, precip_reshape, shading='auto', cmap='Blues')
+    plt.colorbar(label="Pluie (mm)")
+    plt.xlabel("X coordinate (m)")
+    plt.ylabel("Y coordinate (m)")
+    plt.show()
+
+    
