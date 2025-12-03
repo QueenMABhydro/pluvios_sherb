@@ -17,11 +17,12 @@ from pykrige import OrdinaryKriging3D
 #main_dir = os.path.realpath(os.path.dirname(__file__))
 main_dir = "C:/Users/hamj2113/Desktop/Collecteur_de_lhospice_original/code"
 
-# Grilles de points xyz (500x500m) 
-grille_xyz = pd.read_csv(main_dir+'/grilles_elev/grille_xyz.csv')
-grille_xyz = grille_xyz[['X','Y','ELEV_1']]
-grille_xyz = grille_xyz.rename(columns={'ELEV_1': 'Z'})
-grille_xyz[['X','Y','Z']] = np.floor(grille_xyz[['X','Y','Z']]*10**6)/10**6
+# Grille radar - centroides xyz (500x500m) 
+radar_grid = pd.read_csv(main_dir+'/radar_grid/radar_grid_xyz.csv')
+radar_grid = radar_grid.set_index('id')
+radar_grid = radar_grid[['X','Y','ELEV_1']]
+radar_grid = radar_grid.rename(columns={'ELEV_1': 'Z'})
+radar_grid[['X','Y','Z']] = np.floor(radar_grid[['X','Y','Z']]*10**6)/10**6
 
 gx = np.array(grille_xyz['X'])
 gy = np.array(grille_xyz['Y'])
@@ -78,8 +79,18 @@ for t in temps :
     
     resultats[t] = result_t
     
+# %% Rainfall time series
+timeseries = pd.concat(resultats, names=["Temps", "points"])
 
+timeseries_estim = timeseries["estimation"].unstack("points")
+timeseries_estim2 = timeseries_estim.fillna(0)                      #Remplacer les nan par 0 pour PCSWMM
+timeseries_estim2.index = pd.to_datetime(timeseries_estim2.index)
+
+#timeseries_var = timeseries["variance"].unstack("points")
+
+#timeseries_estim2.to_csv(main_dir + "/precip_data/20250517_20250519/timeseries.csv")
     
+
 
 
 
