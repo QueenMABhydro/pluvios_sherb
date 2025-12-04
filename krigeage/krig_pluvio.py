@@ -82,17 +82,29 @@ for t in temps :
     
     resultats[t] = result_t
     
-# %% Rainfall time series
-timeseries = pd.concat(resultats, names=["Temps", "points"])
-
-timeseries_estim = timeseries["estimation"].unstack("points")
-timeseries_estim2 = timeseries_estim.fillna(0)                      #Remplacer les nan par 0 pour PCSWMM
-timeseries_estim2.index = pd.to_datetime(timeseries_estim2.index)
-
-#timeseries_var = timeseries["variance"].unstack("points")
-
-#timeseries_estim2.to_csv(main_dir + "/precip_data/20250517_20250519/timeseries.csv")
+# %% Vérifier résultats
+#fonction visualiser_grilles_csv mais adapter au reste du script (TEMPORAIRE)
+lon = gx
+lat = gy
+precip = resultats[pd.to_datetime("2025-05-17 13:15:00")]['estimation']
     
+    # creer la grille. Tres inefficace car la grille brute existe probablement quelque part
+lon_tot=np.arange(lon[0],lon[len(lon)-1]+500, 500)
+lat_tot=lat[0:33]
+x, y = np.meshgrid(lon_tot, lat_tot)
+    
+    # faire un reshape de la precip 
+precip_reshape= np.reshape(precip, (len(lon_tot),len(lat_tot)) ) 
+precip_reshape=np.transpose(precip_reshape)
+
+    # ----------- FIN DE LA SECTION QUI SERA PROBABLEMENT A MODIFIER APRES MENAGE
+
+    # Tracer la grille. Il faudrait ajouter pluviometres, et peut-etre carte
+plt.pcolormesh(x, y, precip_reshape, shading='auto', cmap='Blues')
+plt.colorbar(label="Pluie (mm)")
+plt.xlabel("X coordinate (m)")
+plt.ylabel("Y coordinate (m)")
+plt.show()
 
 
 
