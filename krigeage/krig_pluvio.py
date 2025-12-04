@@ -61,14 +61,17 @@ for t in temps :
     
     x_val = np.array([ligne[f"X_{st}"]     for st in stations])        #Coordonnees X des pluviometres
     y_val = np.array([ligne[f"Y_{st}"]     for st in stations])        #Coordonnees Y des pluviometres
-    z_val = np.array([ligne[f"Z_{st}"]     for st in stations])        #Coordonnees Z des pluviometres
+    #z_val = np.array([ligne[f"Z_{st}"]     for st in stations])       #Coordonnees Z des pluviometres
     precip = np.array([ligne[f"precip_{st}"] for st in stations])      #Precip aux pluviometres
     
     #DataFrame du pas de temps
-    result_t = pd.DataFrame({"x":gx, "y":gy, "z":gz, "estimation":np.nan, "variance":np.nan})
+    result_t = pd.DataFrame({"x":gx, "y":gy, "estimation":np.nan, "variance":np.nan}, index= radar_grid.index)
     
     if len(precip) > 0 and not np.all(np.isnan(precip)):
-        krig = OrdinaryKriging3D(x_val,y_val,z_val,precip,variogram_model='spherical')
+        krig = OrdinaryKriging(x_val,y_val,precip,variogram_model='spherical',
+                               nlags=2, enable_plotting=False, verbose=False,
+                               enable_statistics=False, coordinates_type='euclidean', 
+                               pseudo_inv=True, weight=False)
     
         estim, var = krig.execute("points", gx, gy, gz)
     
@@ -90,6 +93,7 @@ timeseries_estim2.index = pd.to_datetime(timeseries_estim2.index)
 
 #timeseries_estim2.to_csv(main_dir + "/precip_data/20250517_20250519/timeseries.csv")
     
+
 
 
 
