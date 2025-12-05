@@ -64,73 +64,76 @@ def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pas_temps)
     return donnees_pluvio_complet
 
 
-def visualiser_grilles_csv(grille_krigee, emplacements_pluvios, donnees_pluvios, date, heures):
+def visualiser_grilles_csv(grille_krigee, radar_grid, donnees_pluvios, emplacements_pluvios, date_heure):
     """
     Parameters
     ----------
-    grille_krigee : chemin (chaine de caracteres) vers le fichier csv des donnees krigees
-        Le fichier csv contient 6 colonnes, soient une colonne d'index sans titre
-        une colonne 'x' avec les longitudes en metres, une colonne 'y'
-        avec les latitudes en metres, une colonne 'z' avec les altitudes
-        en metres, une colonne 'estimation' avec les quantitees (absolues) de pluie
-        estimees par krigeage en mm, et une colonne 'variance' avec la variance du krigeage
-        en mm^2
-        
-    date: date (chaine de caracteres) en format 'mois/jour/annee', par exemple '5/17/2025'
-        Necessaire pour aller chercher les donnees brutes aux pluviometres 
-        (la bonne ligne)
-        
-    emplacements_pluvios: chaine de caracteres. Chemin vers le fichier csv qui contient les emplacements des pluviometres
-        
-    donnees_pluvios: chaine de caracteres. Chemin vers le fichier csv qui contient les valeurs observees aux pluviometres
-        
-    heures: chaine de caracteres.
-        heure de l'observation, avec un format comme cet exemple: '13:30:00 à 13:34:59h'
+    grille_krigee : Chaine de caracteres
+        Chemin vers le fichier .csv contenant les donnees krigees.
+        Le fichier csv contient 5 colonnes, soient une colonne d'index sans titre
+        une colonne 'x' avec les longitudes en metres, une colonne 'y' avec les latitudes en metres, 
+        une colonne 'estimation' avec les quantitees (absolues) de pluie estimees par krigeage en mm, 
+        et une colonne 'variance' avec la variance du krigeage en mm^2
+    
+    radar_grid : Chaine de caracteres
+        Chemin vers le fichier .csv contenant les coordonnees des cellules ou les precip sont krigees.
+        C'est une grille 500 x 500 m
+    
+    donnees_pluvios : Chaine de caracteres
+        Chemin vers le fichier .csv contenant les donnees de tous les pluviometres et pour tous
+        les pas de temps de la periode (*precip_complete.csv)
+    
+    emplacements_pluvios : Chaine de caracteres
+        Chemin vers le fichier .csv contenant les coordonnees 'x' et 'y', en metre, des pluviometres
+        (*pluvio_xyz.csv)
+    
+    date_heure : Chaine de caracteres
+        Pas de temps observe, avec un format comme cet exemple : "2025-05-17 13:30:00"
 
     Returns
     -------
     None.
-
+    
     """
     # Preparation des donnees
     donnees = pd.read_csv(grille_krigee)
-    lon = donnees['x'].to_numpy()
-    lat = donnees['y'].to_numpy()
-    precip = donnees['estimation'].to_numpy()
+    donnees = donnees['estimation']
+    radar_grid = pd.read_csv(radar_grid)
     
-    # creer la grille. Tres inefficace car la grille brute existe probablement quelque part
+    lon = np.array(radar_grid['X'])
+    lat = np.array(radar_grid['Y'])
+    
     lon_tot=np.arange(lon[0],lon[len(lon)-1]+500, 500)
     lat_tot=lat[0:33]
     x, y = np.meshgrid(lon_tot, lat_tot)
     
     # faire un reshape de la precip 
-    precip_reshape= np.reshape(precip, (len(lon_tot),len(lat_tot)) ) 
+    precip_reshape= np.reshape(donnees, (len(lon_tot),len(lat_tot)) ) 
     precip_reshape=np.transpose(precip_reshape)
-
+    
     # Aller chercher les donnees correspondantes pour les pluvios
-    donnees_pluvios= pd.read_csv(donnees_pluvios)
+    donnees_pluvios = pd.read_csv(donnees_pluvios)
     emplacements_pluvios= pd.read_csv(emplacements_pluvios)
     
     valeurs_pluvios_date=emplacements_pluvios[['X', 'Y', 'SONDEID']]
     valeurs_pluvios_date_classe=valeurs_pluvios_date.sort_values(by='SONDEID')
+    valeurs_pluvio = valeurs_pluvios_date_classe.set_index('SONDEID')
     
-    donnees_pluvios_date=donnees_pluvios[donnees_pluvios['Date']== date]
-    donnees_pluvios_date_heure=donnees_pluvios_date[donnees_pluvios_date['Période']==heures]
-    del donnees_pluvios_date_heure['Date']  # Ca devrait vraiment etre plus simple, je ne comprends pas pourquoi "drop" ne fonctionne pas
-    del donnees_pluvios_date_heure['Période']
-    donnees_classees = donnees_pluvios_date_heure.sort_index(axis=1)
-    valeurs_pluvios_date_classe['valeur']=donnees_classees.iloc[0].values
+    data_pluvio = serie_precip.loc[pd.Timestamp(date_heure)]
+    data_pluvio = data_pluvio.sort_index()
+    data_pluvio = data_pluvio.rename('precip')
     
+    valeurs_pluvio['precip'] = data_pluvio   #Dataframe X, Y, precip de chaque station
     
-    # Tracer la grille. 
+    # Tracer la grille
     plt.pcolormesh(x, y, precip_reshape, shading='auto', cmap='Blues')
     plt.colorbar(label="Pluie (mm)")
     plt.xlabel("X coordinate (m)")
     plt.ylabel("Y coordinate (m)")
     
     # Ajouter les pluviometres
-    plt.scatter(valeurs_pluvios_date_classe['X'], valeurs_pluvios_date_classe['Y'], c=valeurs_pluvios_date_classe['valeur'].astype(float), cmap='Blues', edgecolor='black',s=80)
-    
+    plt.scatter(valeurs_pluvio['X'], valeurs_pluvio['Y'], c=valeurs_pluvio['precip'].astype(float), cmap='Blues', edgecolor='black',s=80)
+        
     plt.show()
 
     
