@@ -64,7 +64,7 @@ def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pas_temps)
     return donnees_pluvio_complet
 
 
-def visualiser_grilles_csv(fichier):
+def visualiser_grilles_csv(fichier, date, heures):
     """
     Parameters
     ----------
@@ -75,14 +75,20 @@ def visualiser_grilles_csv(fichier):
         en metres, une colonne 'estimation' avec les quantitees (absolues) de pluie
         estimees par krigeage en mm, et une colonne 'variance' avec la variance du krigeage
         en mm^2
+        
+    date: date (chaine de caracteres) en format 'mois/jour/annee', par exemple '5/17/2025'
+        Necessaire pour aller chercher les donnees brutes aux pluviometres 
+        (la bonne ligne)
+        
+    heure: chaine de caracteres.
+        heure de l'observation, avec un format comme cet exemple: '13:30:00 à 13:34:59h'
 
     Returns
     -------
     None.
 
     """
-    # Preparation des donnees: ATTENTION, CETTE SECTION EST PROBABLEMENT 
-    # EVITABLE (EN TOUT OU EN PARTIE) SI ON FAIT DU MENAGE ET QU'ON ORGANISE MIEUX LES CODES'
+    # Preparation des donnees
     donnees = pd.read_csv(fichier)
     lon = donnees['x'].to_numpy()
     lat = donnees['y'].to_numpy()
@@ -97,13 +103,30 @@ def visualiser_grilles_csv(fichier):
     precip_reshape= np.reshape(precip, (len(lon_tot),len(lat_tot)) ) 
     precip_reshape=np.transpose(precip_reshape)
 
-    # ----------- FIN DE LA SECTION QUI SERA PROBABLEMENT A MODIFIER APRES MENAGE
-
-    # Tracer la grille. Il faudrait ajouter pluviometres, et peut-etre carte
+    # Aller chercher les donnees correspondantes pour les pluvios
+    donnees_pluvios= pd.read_csv('/Users/marieamelie/Documents/Recherche/CodesPython/pluvios_sherb/fichiers/pluviometres.csv')
+    emplacements_pluvios= pd.read_csv('/Users/marieamelie/Documents/Recherche/CodesPython/pluvios_sherb/fichiers/pluvio_xyz.csv')
+    
+    valeurs_pluvios_date=emplacements_pluvios[['X', 'Y', 'SONDEID']]
+    valeurs_pluvios_date_classe=valeurs_pluvios_date.sort_values(by='SONDEID')
+    
+    donnees_pluvios_date=donnees_pluvios[donnees_pluvios['Date']== date]
+    donnees_pluvios_date_heure=donnees_pluvios_date[donnees_pluvios_date['Période']==heure]
+    del donnees_pluvios_date_heure['Date']  # Ca devrait vraiment etre plus simple, je ne comprends pas pourquoi "drop" ne fonctionne pas
+    del donnees_pluvios_date_heure['Période']
+    donnees_classees = donnees_pluvios_date_heure.sort_index(axis=1)
+    valeurs_pluvios_date_classe['valeur']=donnees_classees.iloc[0].values
+    
+    
+    # Tracer la grille. 
     plt.pcolormesh(x, y, precip_reshape, shading='auto', cmap='Blues')
     plt.colorbar(label="Pluie (mm)")
     plt.xlabel("X coordinate (m)")
     plt.ylabel("Y coordinate (m)")
+    
+    # Ajouter les pluviometres
+    plt.scatter(valeurs_pluvios_date_classe['X'], valeurs_pluvios_date_classe['Y'], c=valeurs_pluvios_date_classe['valeur'].astype(float), cmap='Blues', edgecolor='black',s=80)
+    
     plt.show()
 
     
