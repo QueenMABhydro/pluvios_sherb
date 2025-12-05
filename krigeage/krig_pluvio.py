@@ -25,9 +25,9 @@ radar_grid = radar_grid[['X','Y','ELEV_1']]
 radar_grid = radar_grid.rename(columns={'ELEV_1': 'Z'})
 radar_grid[['X','Y','Z']] = np.floor(radar_grid[['X','Y','Z']]*10**6)/10**6
 
-gx = np.array(grille_xyz['X'])
-gy = np.array(grille_xyz['Y'])
-gz = np.array(grille_xyz['Z'])
+gx = np.array(radar_grid['X'])
+gy = np.array(radar_grid['Y'])
+gz = np.array(radar_grid['Z'])
 
 # Coordonnees xyz des pluviometres
 pluvio_xyz = pd.read_csv(main_dir+'/precipitations/Emplacement des pluviomètres/pluvio_xyz.csv')
@@ -106,6 +106,7 @@ plt.colorbar(label="Pluie (mm)")
 plt.xlabel("X coordinate (m)")
 plt.ylabel("Y coordinate (m)")
 plt.show()
+
 
 
 
