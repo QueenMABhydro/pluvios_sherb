@@ -11,7 +11,8 @@ Justine Hamelin
 # %% Libraries
 import pandas as pd
 import numpy as np
-from pykrige import OrdinaryKriging3D
+from pykrige import OrdinaryKriging
+import matplotlib.pyplot as plt
 
 # %% Read files
 #main_dir = os.path.realpath(os.path.dirname(__file__))
@@ -105,6 +106,7 @@ plt.colorbar(label="Pluie (mm)")
 plt.xlabel("X coordinate (m)")
 plt.ylabel("Y coordinate (m)")
 plt.show()
+
 
 
 
