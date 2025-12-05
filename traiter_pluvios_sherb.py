@@ -8,6 +8,8 @@ Ville de Sherbrooke.
 - "ajoute_manquantes": Ajouter explicitement les donnees manquantes
 - "filtre_precip_louche": filtrer les valeurs qui semblent aberrantes
 (avant de coder cette fonction, verifier si le code existe deja)
+- "krig_pluvio" : Kriger les donnees des pluviometres sur une grille "radar"
+couvrant la region etudiee
 
 @author: Marie-Amelie Boucher, USherbrooke
 """
@@ -62,6 +64,95 @@ def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pas_temps)
     donnees_pluvio_complet.to_csv(fichier_modif, sep=',')                               #Enregistrer le dataframe en .csv
     
     return donnees_pluvio_complet
+
+
+def krig_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios):
+    """
+    Parameters
+    ----------
+    radar_grid : Chaine de caracteres
+        Chemin vers le fichier .csv contenant les coordonnees des cellules ou les precip sont krigees.
+        C'est une grille 500 x 500 m (*radar_grid_xyz.csv)
+    
+    emplacements_pluvios : Chaine de caracteres
+        Chemin vers le fichier .csv contenant les coordonnees 'x' et 'y', en metre, des pluviometres
+        (*pluvio_xyz.csv)
+    
+    donnees_pluvios : Chaine de caracteres
+        Chemin vers le fichier .csv contenant les donnees de tous les pluviometres et pour tous
+        les pas de temps de la periode (*precip_complete.csv)
+
+    Returns
+    -------
+    resultats : Dictionary
+        Dictionnaire ou on retrouve un dataframe pour chaque pas de temps.
+        Chaque df a une colonne 'x', 'y' (representant chaque case dans la grille radar), 'estimation' et 'variance'
+        Pour selectionner 1 seule grille : exemple : resultats[pd.to_datetime("2025-05-17 13:30:00")]
+    
+    """  
+    # Grille radar - centroides xyz (500x500m) 
+    radar_grid = pd.read_csv(radar_grid)
+    radar_grid['id'] = 'P' + radar_grid['id'].astype(str) #à voir si utile avec PCSWMM
+    radar_grid = radar_grid.set_index('id')
+    radar_grid = radar_grid[['X','Y','ELEV_1']]
+    radar_grid = radar_grid.rename(columns={'ELEV_1': 'Z'})
+    radar_grid[['X','Y','Z']] = np.floor(radar_grid[['X','Y','Z']]*10**6)/10**6
+    
+    gx = np.array(radar_grid['X'])
+    gy = np.array(radar_grid['Y'])
+    
+    # Coordonnees xyz des pluviometres
+    pluvio_xyz = pd.read_csv(emplacements_pluvios)
+    pluvio_xyz = pluvio_xyz.set_index('SONDEID')
+    pluvio_xyz = pluvio_xyz[['X','Y','ELEV_1']]
+    pluvio_xyz = pluvio_xyz.rename(columns={'ELEV_1': 'Z'})
+    pluvio_xyz[['X','Y','Z']] = np.floor(pluvio_xyz[['X','Y','Z']]*10**6)/10**6
+
+    # Donnees pluviometres
+    donnees_pluvios = pd.read_csv(donnees_pluvios)
+    donnees_pluvios = donnees_pluvios.set_index('Unnamed: 0')
+    donnees_pluvios = donnees_pluvios.rename_axis('Temps')
+    donnees_pluvios.index = pd.to_datetime(donnees_pluvios.index)
+    
+    #Rassembler les donnees des pluviometres aux pluviometres
+    stations = donnees_pluvios.columns.values
+    temps = donnees_pluvios.index
+
+    df = pd.DataFrame(index=temps)
+
+    for station in pluvio_xyz.index :
+        df[f'X_{station}'] = pluvio_xyz.loc[station, 'X']
+        df[f'Y_{station}'] = pluvio_xyz.loc[station, 'Y']
+        df[f'precip_{station}'] = donnees_pluvios[station]
+    
+    #Krigeage
+    resultats = {}
+    for t in temps :
+        ligne = df.loc[t]       #Info des pluviometres pour 1 pas de temps
+        
+        x_val = np.array([ligne[f"X_{st}"]     for st in stations])        #Coordonnees X des pluviometres
+        y_val = np.array([ligne[f"Y_{st}"]     for st in stations])        #Coordonnees Y des pluviometres
+        precip = np.array([ligne[f"precip_{st}"] for st in stations])      #Precip aux pluviometres
+        
+        #DataFrame du pas de temps
+        result_t = pd.DataFrame({"x":gx, "y":gy, "estimation":np.nan, "variance":np.nan}, 
+                                index= radar_grid.index)
+        
+        if len(precip) > 0 and not np.all(np.isnan(precip)):
+            krig = OrdinaryKriging(x_val,y_val,precip,variogram_model='spherical',
+                                   nlags=2, enable_plotting=False, verbose=False,
+                                   enable_statistics=False, coordinates_type='euclidean', 
+                                   pseudo_inv=True, weight=False)
+        
+            estim, var = krig.execute("points", gx, gy)
+        
+            result_t["estimation"] = estim
+            result_t["variance"] = var
+            
+        else : pass
+        resultats[t] = result_t
+        
+        return resultats #Revoir comment on veut l'enregistrer
 
 
 def visualiser_grilles_csv(grille_krigee, radar_grid, donnees_pluvios, emplacements_pluvios, date_heure):
@@ -135,5 +226,3 @@ def visualiser_grilles_csv(grille_krigee, radar_grid, donnees_pluvios, emplaceme
     plt.scatter(valeurs_pluvio['X'], valeurs_pluvio['Y'], c=valeurs_pluvio['precip'].astype(float), cmap='Blues', edgecolor='black',s=80)
         
     plt.show()
-
-    
