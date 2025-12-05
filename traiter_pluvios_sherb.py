@@ -109,13 +109,13 @@ def visualiser_grilles_csv(grille_krigee, emplacements_pluvios, donnees_pluvios,
 
     # Aller chercher les donnees correspondantes pour les pluvios
     donnees_pluvios= pd.read_csv(donnees_pluvios)
-    emplacements_pluvios= pd.read_csv(emplacements_pluvio)
+    emplacements_pluvios= pd.read_csv(emplacements_pluvios)
     
     valeurs_pluvios_date=emplacements_pluvios[['X', 'Y', 'SONDEID']]
     valeurs_pluvios_date_classe=valeurs_pluvios_date.sort_values(by='SONDEID')
     
     donnees_pluvios_date=donnees_pluvios[donnees_pluvios['Date']== date]
-    donnees_pluvios_date_heure=donnees_pluvios_date[donnees_pluvios_date['Période']==heure]
+    donnees_pluvios_date_heure=donnees_pluvios_date[donnees_pluvios_date['Période']==heures]
     del donnees_pluvios_date_heure['Date']  # Ca devrait vraiment etre plus simple, je ne comprends pas pourquoi "drop" ne fonctionne pas
     del donnees_pluvios_date_heure['Période']
     donnees_classees = donnees_pluvios_date_heure.sort_index(axis=1)
