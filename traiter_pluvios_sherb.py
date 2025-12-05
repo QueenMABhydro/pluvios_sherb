@@ -64,11 +64,11 @@ def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pas_temps)
     return donnees_pluvio_complet
 
 
-def visualiser_grilles_csv(fichier, date, heures):
+def visualiser_grilles_csv(grille_krigee, emplacements_pluvios, donnees_pluvios, date, heures):
     """
     Parameters
     ----------
-    fichier : chemin (chaine de caracteres) vers le fichier csv des donnees krigees
+    grille_krigee : chemin (chaine de caracteres) vers le fichier csv des donnees krigees
         Le fichier csv contient 6 colonnes, soient une colonne d'index sans titre
         une colonne 'x' avec les longitudes en metres, une colonne 'y'
         avec les latitudes en metres, une colonne 'z' avec les altitudes
@@ -80,7 +80,11 @@ def visualiser_grilles_csv(fichier, date, heures):
         Necessaire pour aller chercher les donnees brutes aux pluviometres 
         (la bonne ligne)
         
-    heure: chaine de caracteres.
+    emplacements_pluvios: chaine de caracteres. Chemin vers le fichier csv qui contient les emplacements des pluviometres
+        
+    donnees_pluvios: chaine de caracteres. Chemin vers le fichier csv qui contient les valeurs observees aux pluviometres
+        
+    heures: chaine de caracteres.
         heure de l'observation, avec un format comme cet exemple: '13:30:00 à 13:34:59h'
 
     Returns
@@ -89,7 +93,7 @@ def visualiser_grilles_csv(fichier, date, heures):
 
     """
     # Preparation des donnees
-    donnees = pd.read_csv(fichier)
+    donnees = pd.read_csv(grille_krigee)
     lon = donnees['x'].to_numpy()
     lat = donnees['y'].to_numpy()
     precip = donnees['estimation'].to_numpy()
@@ -104,8 +108,8 @@ def visualiser_grilles_csv(fichier, date, heures):
     precip_reshape=np.transpose(precip_reshape)
 
     # Aller chercher les donnees correspondantes pour les pluvios
-    donnees_pluvios= pd.read_csv('/Users/marieamelie/Documents/Recherche/CodesPython/pluvios_sherb/fichiers/pluviometres.csv')
-    emplacements_pluvios= pd.read_csv('/Users/marieamelie/Documents/Recherche/CodesPython/pluvios_sherb/fichiers/pluvio_xyz.csv')
+    donnees_pluvios= pd.read_csv(donnees_pluvios)
+    emplacements_pluvios= pd.read_csv(emplacements_pluvio)
     
     valeurs_pluvios_date=emplacements_pluvios[['X', 'Y', 'SONDEID']]
     valeurs_pluvios_date_classe=valeurs_pluvios_date.sort_values(by='SONDEID')
