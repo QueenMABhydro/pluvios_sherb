@@ -16,6 +16,7 @@ couvrant la region etudiee
 
 import pandas as pd
 import numpy as np
+from pykrige import OrdinaryKriging
 import matplotlib.pyplot as plt
 
 
@@ -204,13 +205,17 @@ def visualiser_grilles_csv(grille_krigee, radar_grid, donnees_pluvios, emplaceme
     
     # Aller chercher les donnees correspondantes pour les pluvios
     donnees_pluvios = pd.read_csv(donnees_pluvios)
+    donnees_pluvios = donnees_pluvios.set_index('Unnamed: 0')
+    donnees_pluvios = donnees_pluvios.rename_axis('Temps')
+    donnees_pluvios.index = pd.to_datetime(serie_precip.index)
+    
     emplacements_pluvios= pd.read_csv(emplacements_pluvios)
     
     valeurs_pluvios_date=emplacements_pluvios[['X', 'Y', 'SONDEID']]
     valeurs_pluvios_date_classe=valeurs_pluvios_date.sort_values(by='SONDEID')
     valeurs_pluvio = valeurs_pluvios_date_classe.set_index('SONDEID')
     
-    data_pluvio = serie_precip.loc[pd.Timestamp(date_heure)]
+    data_pluvio = donnees_pluvios.loc[pd.Timestamp(date_heure)]
     data_pluvio = data_pluvio.sort_index()
     data_pluvio = data_pluvio.rename('precip')
     
