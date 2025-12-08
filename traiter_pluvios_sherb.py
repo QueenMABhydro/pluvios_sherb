@@ -213,12 +213,14 @@ def visualiser_grilles_csv(grille_krigee, radar_grid, donnees_pluvios, emplaceme
     valeurs_pluvio['precip'] = data_pluvio   #Dataframe X, Y, precip de chaque station
 
     # Tracer la grille
-    plt.pcolormesh(x, y, precip_reshape, shading='auto', cmap='Blues')
+    plt.pcolormesh(x, y, precip_reshape, shading='auto', cmap='Blues',
+                   vmin=0, vmax=np.nanmax(valeurs_pluvio['precip']))
     plt.colorbar(label="Pluie (mm)")
     plt.xlabel("X coordinate (m)")
     plt.ylabel("Y coordinate (m)")
 
     # Ajouter les pluviometres
-    plt.scatter(valeurs_pluvio['X'], valeurs_pluvio['Y'], c=valeurs_pluvio['precip'].astype(float), cmap='Blues', edgecolor='black',s=80)
+    plt.scatter(valeurs_pluvio['X'], valeurs_pluvio['Y'], c=valeurs_pluvio['precip'].astype(float), 
+                cmap='Blues', edgecolor='black',s=80, vmin=0, vmax=np.nanmax(valeurs_pluvio['precip']))
 
     plt.show()
