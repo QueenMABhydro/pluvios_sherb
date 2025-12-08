@@ -136,7 +136,7 @@ def krig_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios):
 
         if len(precip) > 0 and not np.all(np.isnan(precip)):
             krig = OrdinaryKriging(x_val,y_val,precip,variogram_model='spherical',
-                                   nlags=2, enable_plotting=False, verbose=False,
+                                   nlags=8, enable_plotting=False, verbose=False,
                                    enable_statistics=False, coordinates_type='euclidean',
                                    pseudo_inv=True, weight=False)
 
@@ -213,14 +213,24 @@ def visualiser_grilles_csv(grille_krigee, radar_grid, donnees_pluvios, emplaceme
     valeurs_pluvio['precip'] = data_pluvio   #Dataframe X, Y, precip de chaque station
 
     # Tracer la grille
-    plt.pcolormesh(x, y, precip_reshape, shading='auto', cmap='Blues',
-                   vmin=0, vmax=np.nanmax(valeurs_pluvio['precip']))
+    min_obs=min(valeurs_pluvio['precip'])
+    max_obs=max(valeurs_pluvio['precip'])
+    min_grille= np.nanmax(precip_reshape)
+    max_grille= np.nanmin(precip_reshape)
+    
+    min_global=min([min_obs,min_grille])
+    max_global=max([max_obs,max_grille])
+    
+    norm = plt.Normalize(min_global, max_global)
+    
+    plt.pcolormesh(x, y, precip_reshape, shading='auto', cmap='Blues', norm=norm)
     plt.colorbar(label="Pluie (mm)")
-    plt.xlabel("X coordinate (m)")
-    plt.ylabel("Y coordinate (m)")
+    plt.xlabel("Longitude (m)")
+    plt.ylabel("Latitude (m)")
+    plt.title(date_heure)
 
     # Ajouter les pluviometres
     plt.scatter(valeurs_pluvio['X'], valeurs_pluvio['Y'], c=valeurs_pluvio['precip'].astype(float), 
-                cmap='Blues', edgecolor='black',s=80, vmin=0, vmax=np.nanmax(valeurs_pluvio['precip']))
+                cmap='Blues', edgecolor='black',s=80, norm=norm)
 
     plt.show()
