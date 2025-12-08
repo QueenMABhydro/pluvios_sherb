@@ -92,7 +92,7 @@ def krig_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios):
     """  
     # Grille radar - centroides xyz (500x500m) 
     radar_grid = pd.read_csv(radar_grid)
-    radar_grid['id'] = 'P' + radar_grid['id'].astype(str) #à voir si utile avec PCSWMM
+    #radar_grid['id'] = 'P' + radar_grid['id'].astype(str) #à voir si utile avec PCSWMM
     radar_grid = radar_grid.set_index('id')
     radar_grid = radar_grid[['X','Y','ELEV_1']]
     radar_grid = radar_grid.rename(columns={'ELEV_1': 'Z'})
@@ -152,7 +152,7 @@ def krig_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios):
         else : pass
         resultats[t] = result_t
         
-        return resultats #Revoir comment on veut l'enregistrer
+    return resultats
 
 
 def visualiser_grilles_csv(grille_krigee, radar_grid, donnees_pluvios, emplacements_pluvios, date_heure):
