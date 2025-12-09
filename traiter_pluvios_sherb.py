@@ -18,7 +18,7 @@ import pandas as pd
 import numpy as np
 from pykrige import OrdinaryKriging
 import matplotlib.pyplot as plt
-
+import pickle
 
 def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pas_temps):
     """
@@ -237,3 +237,45 @@ def visualiser_grilles_csv(grille_krigee, radar_grid, donnees_pluvios, emplaceme
                 cmap='Blues', edgecolor='black',s=80, norm=norm)
 
     plt.show()
+
+
+def format_pcswmm(index_garde, chemin_resultats, chemin_timeseries):
+    """
+    Parameters
+    ----------
+    index_garde : list
+        Liste des ID des cases de la radar_grid que l'on veut garder
+        *Facilement identifiable sur PCSWMM avec le shapefile de la grille
+    chemin_resultats : chaine de caracteres
+        Chemin vers le fichier .pkl, un dictionnaire contenant des dataframes :
+        Un df par pas de temps, les ID des cases de la grille radar en index
+        les colonnes sont "x", "y", "estimation" et "variance"
+    chemin_timeseries : chaine de caracteres
+        Chemin ou le fichier .csv sera enregistre. PCSWMM prend ce format de fichier.
+
+    Returns
+    -------
+    timeseries_estim : DataFrame
+        index : serie de pas de temps
+        colonnes : les ID des cases couvrants la region etudiee
+        valeurs : precipitation en mm
+    """
+    # Ouvrir le dictionnaire avec les dataframes de chaque pas de temps
+    with open(chemin_resultats, "rb") as f:
+        resultats = pickle.load(f)
+    
+    # Couper la grille pour garder seulement la region etudiee
+    for key, df in resultats.items():
+        idx = sorted(i for i in index_garde if i in df.index)
+        resultats[key] = df.loc[idx]
+    
+    timeseries = pd.concat(resultats, names=["Temps", "points"])
+
+    timeseries_estim = timeseries["estimation"].unstack("points")
+    timeseries_estim = timeseries_estim.fillna(0)                      #Remplacer les nan par 0 pour PCSWMM
+    timeseries_estim = timeseries_estim.clip(lower=0)                  #Mettre les valeurs negatives a zero
+    timeseries_estim.index = pd.to_datetime(timeseries_estim.index)
+
+    timeseries_estim.to_csv(chemin_timeseries)
+
+    return timeseries_estim
