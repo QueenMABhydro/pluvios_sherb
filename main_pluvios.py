@@ -8,7 +8,7 @@ Justine Hamelin
 import os
 import pandas as pd
 
-from traiter_pluvios_sherb import ajoute_manquantes, krig_pluvio, visualiser_grilles_csv
+from traiter_pluvios_sherb import ajoute_manquantes, krig_pluvio, visualiser_grilles_csv, format_pcswmm
 
 # %% Read files
 main_dir = os.path.realpath(os.path.dirname(__file__))
@@ -16,7 +16,7 @@ main_dir = os.path.realpath(os.path.dirname(__file__))
 # %% 1. Completer les evenements avec tous les pas de temps
 
 #ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pas_temps)
-fichier_modif = main_dir+"/precip_data/precip_complete_test2.csv"
+fichier_modif = main_dir+"/precip_data/precip_complete.csv"
 
 ajoute_manquantes(main_dir+"/precip_data/pluviometres.csv", fichier_modif,
                   "2025-05-17", "2025-05-19", "5min")
@@ -46,21 +46,10 @@ visualiser_grilles_csv(main_dir+"/data_krig/20250517_1330.csv", main_dir+"/radar
                        pasdetemps)
 
 # %% 5. Formater les donnees pour PCSWMM
+index_garde = (list(range(811, 819)) + list(range(844, 852)) +
+                list(range(877, 885)) + list(range(910, 918)) +
+                list(range(943, 951)) + list(range(976, 984)))
 
-index_garde = {812, 813, 814, 815, 816, 817, 818,           #Correspond aux index des cellules de la grille
-               845, 846, 847, 848, 849, 850, 851,           #radar qui couvre le bassin versant a l'etude.
-               878, 879, 880, 881, 882, 883, 884,
-               911, 912, 913, 914, 915, 916, 917}           #On les a determiner dans PCSWMM
-
-#Couper la grille pour garder seulement la region etudiee
-for key, df in resultats.items():
-    index = sorted(i for i in index_garde if i in df.index)
-    resultats[key] = df.loc[index]
-
-timeseries = pd.concat(resultats, names=["Temps", "points"])
-
-timeseries_estim = timeseries["estimation"].unstack("points")
-timeseries_estim = timeseries_estim.fillna(0)                      #Remplacer les nan par 0 pour PCSWMM
-timeseries_estim.index = pd.to_datetime(timeseries_estim.index)
-
-timeseries_estim.to_csv(main_dir + "/precip_data/20250517_20250519/timeseries3.csv")
+#format_pcswmm(index_garde, chemin_resultats, chemin_timeseries)
+timeseries_estim = format_pcswmm(index_garde, main_dir+"/data_krig/dict_df.pkl",
+              main_dir+"/precip_data/20250517_20250519/timeseries2.csv")
