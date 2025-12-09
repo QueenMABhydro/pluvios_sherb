@@ -93,6 +93,7 @@ def krig_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios):
     radar_grid = radar_grid.set_index('id')
     radar_grid = radar_grid[['X','Y','ELEV_1']]
     radar_grid = radar_grid.rename(columns={'ELEV_1': 'Z'})
+    radar_grid = radar_grid.apply(pd.to_numeric)
     radar_grid[['X','Y','Z']] = np.floor(radar_grid[['X','Y','Z']]*10**6)/10**6
 
     gx = np.array(radar_grid['X'])
@@ -103,6 +104,7 @@ def krig_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios):
     pluvio_xyz = pluvio_xyz.set_index('SONDEID')
     pluvio_xyz = pluvio_xyz[['X','Y','ELEV_1']]
     pluvio_xyz = pluvio_xyz.rename(columns={'ELEV_1': 'Z'})
+    pluvio_xyz = pluvio_xyz.apply(pd.to_numeric) 
     pluvio_xyz[['X','Y','Z']] = np.floor(pluvio_xyz[['X','Y','Z']]*10**6)/10**6
 
     # Donnees pluviometres
@@ -110,6 +112,7 @@ def krig_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios):
     donnees_pluvios = donnees_pluvios.set_index('Unnamed: 0')
     donnees_pluvios = donnees_pluvios.rename_axis('Temps')
     donnees_pluvios.index = pd.to_datetime(donnees_pluvios.index)
+    donnees_pluvios = donnees_pluvios.apply(pd.to_numeric) 
 
     #Rassembler les donnees des pluviometres aux pluviometres
     stations = donnees_pluvios.columns.values
