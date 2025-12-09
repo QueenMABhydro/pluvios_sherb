@@ -67,7 +67,7 @@ def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pas_temps)
     return donnees_pluvio_complet
 
 
-def krig_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios):
+def krig_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios, chemin_resultats):
     """
     Parameters
     ----------
@@ -80,6 +80,8 @@ def krig_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios):
     donnees_pluvios : Chaine de caracteres
         Chemin vers le fichier .csv contenant les donnees de tous les pluviometres et pour tous
         les pas de temps de la periode (*precip_complete.csv)
+    chemin_resultats : Chaine de caracteres
+        Chemin vers le dictionnaire de dataframe, soit "resultats" qui est retourne par la fonction
 
     Returns
     -------
@@ -151,7 +153,10 @@ def krig_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios):
         else : pass
         resultats[t] = result_t
 
-    return resultats
+    with open(chemin_resultats, "wb") as f:
+        pickle.dump(resultats, f)
+
+    return resultats, donnees_pluvios
 
 
 def visualiser_grilles_csv(grille_krigee, radar_grid, donnees_pluvios, emplacements_pluvios, date_heure):
