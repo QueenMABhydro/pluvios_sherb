@@ -223,8 +223,8 @@ def visualiser_grilles_csv(grille_krigee, radar_grid, donnees_pluvios, emplaceme
     # Tracer la grille
     min_obs=min(valeurs_pluvio['precip'])
     max_obs=max(valeurs_pluvio['precip'])
-    min_grille= np.nanmax(precip_reshape)
-    max_grille= np.nanmin(precip_reshape)
+    min_grille= np.nanmin(precip_reshape)
+    max_grille= np.nanmax(precip_reshape)
     
     min_global=min([min_obs,min_grille])
     max_global=max([max_obs,max_grille])
