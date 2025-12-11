@@ -69,6 +69,11 @@ def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pas_temps)
 
 def krig_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios, chemin_resultats):
     """
+    Notes
+    ----------
+    Le variogramme n'est pas bon (https://github.com/GeoStat-Framework/PyKrige/discussions/204)
+    il faut revoir les parametres
+    
     Parameters
     ----------
     radar_grid : Chaine de caracteres
@@ -380,6 +385,6 @@ def visualiser_grilles_pkl(grille_krigee, radar_grid, donnees_pluvios, emplaceme
         figures[t] = fig
         
         with open(figures_dump, "wb") as f:     #Enregistrer le dict en .pkl
-            pikle.dump(figures, f)
+            pickle.dump(figures, f)
 
     return figures
