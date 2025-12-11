@@ -27,18 +27,17 @@ ajoute_manquantes(main_dir+"/precip_data/pluviometres.csv", fichier_modif,
 
 # %% 3. Kriger les donnees des pluviometres sur une grille "radar"
 
-#krig_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios)
-resultats = krig_pluvio(main_dir+'/radar_grid/radar_grid_xyz.csv',
+#krig_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios, chemin_resultats)
+resultats, donnees_pluvios = krig_pluvio(main_dir+'/radar_grid/radar_grid_xyz.csv',
                         main_dir+'/precipitations/Emplacement des pluviomètres/pluvio_xyz.csv',
-                        fichier_modif)
+                        fichier_modif, main_dir+"/data_krig/dict_df.pkl")
 
+# %% 4. Validation - Figure
 #Enregister 1 pas de temps (Exemple)
 pasdetemps = "2025-05-17 13:30:00"
 grille = resultats[pd.to_datetime(pasdetemps)]
 grille.to_csv(main_dir + "/data_krig/20250517_1330.csv")
 
-# %% 4. Validation - Figure
-# *Pour le moment, fonctionne pour 1 pas de temps qui autait ete enregistrer de "resultats" a l'etape 3
 
 #visualiser_grilles_csv(grille_krigee, radar_grid, donnees_pluvios, emplacements_pluvios, date_heure)
 visualiser_grilles_csv(main_dir+"/data_krig/20250517_1330.csv", main_dir+"/radar_grid/radar_grid_xyz.csv",
@@ -52,4 +51,4 @@ index_garde = (list(range(811, 819)) + list(range(844, 852)) +
 
 #format_pcswmm(index_garde, chemin_resultats, chemin_timeseries)
 timeseries_estim = format_pcswmm(index_garde, main_dir+"/data_krig/dict_df.pkl",
-              main_dir+"/precip_data/20250517_20250519/timeseries2.csv")
+              main_dir+"/precip_data/20250517_20250519/timeseries.csv")
