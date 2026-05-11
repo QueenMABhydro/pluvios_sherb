@@ -11,6 +11,9 @@ Ville de Sherbrooke.
 - "interpolation_IDW_grid" : Interpolation par pondération inverse à la distance (IDW) 
     des donnees des pluviometres sur une grille couvrant la region etudiee
     Avec "metpy.interpolate.inverse_distance_to_grid"
+- "interpolation_IDW_points : Interpolation par pondération inverse à la distance (IDW) 
+    des donnees des pluviometres sur une grille couvrant la region etudiee
+    Avec "metpy.interpolate.inverse_distance_to_points"
 - "visualiser_grille_IDW_pkl" : Figure illustrant les donnees interpolees (IDW) sous forme 
     de carte avec l'option d'une figure comparant les interpolations et les observations
 - "krig_pluvio" : Krigeage ordinaire des donnees des pluviometres sur une grille "radar"
@@ -154,6 +157,79 @@ def interpolation_IDW_grid(radar_grid, emplacements_pluvios, donnees_pluvios, ra
         df_t = pd.DataFrame({'X':gx, 'Y':gy, 'precip':interpol})       
         resultats[t] = df_t
     
+    #Save les resultats
+    with open(chemin_resultats, "wb") as f:
+        pickle.dump(resultats, f)
+
+    return donnees_pluvios, resultats
+
+
+def interpolation_IDW_points(radar_grid, emplacements_pluvios, donnees_pluvios, rayon, chemin_resultats):
+    """
+    Parameters
+    ----------
+    radar_grid : chaine de caracteres
+        Chemin vers le fichier .csv des coordonnees des points de la grille radar 
+        (radar_grid_xyz.csv)
+    emplacements_pluvios : chaine de caracteres
+        Chemin vers le fichier .csv des coordonnees des emplacements des pluviometres 
+        (pluvio_xyz.csv)
+    donnees_pluvios : chaine de caracteres
+        Chemin vers le fichier .csv des donnees completes des precipitations 
+        (precip_complete.csv)
+    rayon : Int
+        Valeur du rayon d'influence en metre
+    chemin_resultats : chaine de caracteres
+        Chemin vers le dictionnaire de dataframe, soit "resultats" qui est retourne 
+        par la fonction. Enregirster sous le format .pkl
+
+    Returns
+    -------
+    donnees_pluvios : DataFrame
+        DataFrame des donnees des pluviometres : une rangee par pas de temps et 
+        une colonne par pluviometre
+    resultats : Dictionnaire
+        Dictionnaire contenant un Dataframe pour chaque pas de temps. 
+        Chaque DataFrame contient 3 colonnes : "X", "Y" et "precip".
+        Les precipitations sont les valeurs resultant de l'interpolation IDW
+    """
+    # Grille radar - centroides xyz (500x500m)
+    radar_grid = pd.read_csv(radar_grid)
+    radar_grid = radar_grid.set_index('id')
+    radar_grid = radar_grid[['X','Y','ELEV_1']]
+    radar_grid = radar_grid.rename(columns={'ELEV_1': 'Z'})
+    radar_grid = radar_grid.apply(pd.to_numeric)
+    radar_grid[['X','Y','Z']] = np.floor(radar_grid[['X','Y','Z']]*10**6)/10**6
+    
+    xi = (radar_grid[['X', 'Y']].copy()).to_numpy()
+    
+    # Coordonnees xyz des pluviometres
+    pluvio_xyz = pd.read_csv(emplacements_pluvios)
+    pluvio_xyz = pluvio_xyz.set_index('SONDEID')
+    pluvio_xyz = pluvio_xyz[['X','Y','ELEV_1']]
+    pluvio_xyz = pluvio_xyz.rename(columns={'ELEV_1': 'Z'})
+    pluvio_xyz = pluvio_xyz.apply(pd.to_numeric) 
+    pluvio_xyz[['X','Y','Z']] = np.floor(pluvio_xyz[['X','Y','Z']]*10**6)/10**6
+    
+    points = (pluvio_xyz[['X', 'Y']].copy()).to_numpy()
+    
+    # Donnees pluviometres
+    donnees_pluvios = pd.read_csv(donnees_pluvios)
+    donnees_pluvios = donnees_pluvios.set_index('Unnamed: 0')
+    donnees_pluvios = donnees_pluvios.rename_axis('Temps')
+    donnees_pluvios.index = pd.to_datetime(donnees_pluvios.index)
+    donnees_pluvios = donnees_pluvios.apply(pd.to_numeric) 
+    donnees_pluvios = donnees_pluvios[pluvio_xyz.index]
+    
+    #interpolation
+    resultats = {}
+    for t in donnees_pluvios.index :
+        precip = donnees_pluvios.loc[t].to_numpy()   
+        interpol = inverse_distance_to_points(points, precip, xi, rayon)
+        
+        resultats[t] = pd.DataFrame({'X': xi[:, 0],
+        'Y': xi[:, 1], 'precip': interpol})
+
     #Save les resultats
     with open(chemin_resultats, "wb") as f:
         pickle.dump(resultats, f)
