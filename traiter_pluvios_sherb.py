@@ -8,8 +8,9 @@ Ville de Sherbrooke.
 - "ajoute_manquantes": Ajouter explicitement les donnees manquantes
 - "filtre_precip_louche": filtrer les valeurs qui semblent aberrantes
     (avant de coder cette fonction, verifier si le code existe deja)
-- "interpolation_IDW_pluvio" : Interpolation par pondération inverse à la distance (IDW) 
+- "interpolation_IDW_grid" : Interpolation par pondération inverse à la distance (IDW) 
     des donnees des pluviometres sur une grille couvrant la region etudiee
+    Avec "metpy.interpolate.inverse_distance_to_grid"
 - "visualiser_grille_IDW_pkl" : Figure illustrant les donnees interpolees (IDW) sous forme 
     de carte avec l'option d'une figure comparant les interpolations et les observations
 - "krig_pluvio" : Krigeage ordinaire des donnees des pluviometres sur une grille "radar"
@@ -77,7 +78,7 @@ def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pas_temps)
     return donnees_pluvio_complet
 
 
-def interpolation_IDW_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios, rayon, chemin_resultats):
+def interpolation_IDW_grid(radar_grid, emplacements_pluvios, donnees_pluvios, rayon, chemin_resultats):
     """
     Parameters
     ----------
