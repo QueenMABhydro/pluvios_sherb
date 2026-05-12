@@ -7,7 +7,6 @@ Fonctions pour traiter les donnees brutes des pluviometres de la
 Ville de Sherbrooke.
 - "ajoute_manquantes": Ajouter explicitement les donnees manquantes
 - "filtre_precip_louche": Filtrer les valeurs qui semblent aberrantes
-
 - "interpolation_IDW_grid" : Effectuer une interpolation par pondération inverse
     de la distance (IDW) des données des pluviometres sur une grille couvrant la 
     region etudiee avec "metpy.interpolate.inverse_distance_to_grid"
@@ -16,7 +15,6 @@ Ville de Sherbrooke.
     region etudiee avec "metpy.interpolate.inverse_distance_to_points"
 - "krig_ordinaire_pluvio" : Effectuer un krigeage ordinaire des donnees des 
     pluviometres sur une grille radar couvrant la region etudiee
-
 - "format_pcswmm" : Formater les resulats pour les rendre compatibles avec PCSWMM
 
 @author: Marie-Amelie Boucher, USherbrooke
@@ -27,7 +25,8 @@ import numpy as np
 from pykrige import OrdinaryKriging
 import matplotlib.pyplot as plt
 import pickle
-from metpy.interpolate import inverse_distance_to_grid
+from metpy.interpolate import inverse_distance_to_grid, inverse_distance_to_points
+from scipy.spatial.distance import cdist
 
 def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pas_temps):
     """
