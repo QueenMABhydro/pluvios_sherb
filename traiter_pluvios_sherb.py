@@ -6,7 +6,9 @@ Created on Tue Nov 18 15:45:46 2025
 Fonctions pour traiter les donnees brutes des pluviometres de la
 Ville de Sherbrooke.
 - "ajoute_manquantes": Ajouter explicitement les donnees manquantes
-- "filtre_precip_louche": Filtrer les valeurs qui semblent aberrantes
+- "single_raingauge" : Creer un fichier des precipitations completes propre a chaque pluviometre
+- "metadata" : Creer le fichier metadata utiliser par le module rainfallQC
+
 - "interpolation_IDW_grid" : Effectuer une interpolation par pondération inverse
     de la distance (IDW) des données des pluviometres sur une grille couvrant la 
     region etudiee avec "metpy.interpolate.inverse_distance_to_grid"
@@ -15,11 +17,13 @@ Ville de Sherbrooke.
     region etudiee avec "metpy.interpolate.inverse_distance_to_points"
 - "krig_ordinaire_pluvio" : Effectuer un krigeage ordinaire des donnees des 
     pluviometres sur une grille radar couvrant la region etudiee
+
 - "format_pcswmm" : Formater les resulats pour les rendre compatibles avec PCSWMM
 
 @author: Marie-Amelie Boucher, USherbrooke
 """
-
+import os
+import glob
 import pandas as pd
 import numpy as np
 from pykrige import OrdinaryKriging
@@ -73,6 +77,96 @@ def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pas_temps)
     donnees_pluvio_complet.to_csv(fichier_modif, sep=',')                               #Enregistrer le dataframe en .csv
 
     return donnees_pluvio_complet
+
+
+def single_raingauge(precip_complete, dossier_sortie):
+    """
+    Parameters
+    ----------
+    precip_complete : chaine de caracteres
+        Chemin vers le fichier csv des precipitations completes de toutes les stations
+        (precip_complete.csv)
+    dossier_sortie : chaine de caracteres
+        Chemin et nom du dossier de destination 
+
+    Returns
+    -------
+    Le format des fichiers enregistres est csv
+    """
+    donnees_precip_complet = pd.read_csv(precip_complete,index_col=0,parse_dates=True)
+    
+    os.makedirs(dossier_sortie, exist_ok=True) #creer dossier s'il n'existe pas
+    
+    for station in donnees_precip_complet.columns:
+        df_station = donnees_precip_complet[[station]]
+        nom_fichier = f"precip_complete_{station}.csv"
+        chemin_fichier = os.path.join(dossier_sortie, nom_fichier)
+        df_station.to_csv(chemin_fichier, sep=',')    
+
+    return
+
+
+def metadata(emplacements_pluvios, dossier_single_raingauge, fichier_metadata):
+    """
+    Parameters
+    ----------
+    emplacements_pluvios : chaine de caracteres
+        Chemin vers le fichier .csv des coordonnees des emplacements des pluviometres 
+        (pluvio_xyz.csv)
+    dossier_single_raingauge : chaine de caracteres
+        Chemin vers le dossier contenant les fichiers .csv des precipitations de 
+        chaque pluviometre
+    fichier_metadata : chaine de caracteres
+        Chemin et nom du fichier de destination, format .csv
+        Les colonnes sont : station_id, latitude, longitude,
+        start_datetime, end_datetime et path
+
+    Returns
+    -------
+    metadata_df : DataFrame
+        fichier metadata format DataFrame
+    """
+    #Emplacement des pluviometres
+    pluvio_xyz = pd.read_csv(emplacements_pluvios)
+    pluvio_xyz = pluvio_xyz.set_index('SONDEID')
+    pluvio_xyz = pluvio_xyz[['X','Y','ELEV_1']]
+    pluvio_xyz = pluvio_xyz.rename(columns={'ELEV_1': 'Z'})
+    pluvio_xyz = pluvio_xyz.apply(pd.to_numeric) 
+    pluvio_xyz[['X','Y','Z']] = np.floor(pluvio_xyz[['X','Y','Z']]*10**6)/10**6
+    pluvio_xyz.index = pluvio_xyz.index.astype(str)
+    
+    fichiers = glob.glob(os.path.join(dossier_single_raingauge,
+                    'precip_complete_*.csv'))
+    metadata_list = []
+    
+    for fichier in fichiers:
+        nom = os.path.basename(fichier)
+        # Extraire station ID
+        station_id = (nom.replace('precip_complete_', '').replace('.csv', ''))
+        # Lire fichier station
+        df = pd.read_csv(fichier,index_col=0,parse_dates=True)
+
+        # Dates
+        start_datetime = df.index.min()
+        end_datetime = df.index.max()
+
+        latitude = pluvio_xyz.loc[station_id, 'Y']
+        longitude = pluvio_xyz.loc[station_id, 'X']
+        
+        metadata_list.append({
+            'station_id': station_id,
+            'latitude': latitude,
+            'longitude': longitude,
+            'start_datetime': start_datetime,
+            'end_datetime': end_datetime,
+            'path': os.path.abspath(fichier)})
+        
+    metadata_df = pd.DataFrame( metadata_list, columns=['station_id','latitude',
+                'longitude', 'start_datetime','end_datetime','path'])
+    
+    metadata_df.to_csv(fichier_metadata, index=False)
+
+    return metadata_df
 
 
 def interpolation_IDW_grid(radar_grid, emplacements_pluvios, donnees_pluvios, rayon, chemin_resultats):
