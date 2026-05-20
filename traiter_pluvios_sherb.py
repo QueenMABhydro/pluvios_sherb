@@ -127,13 +127,11 @@ def metadata(emplacements_pluvios, dossier_single_raingauge, fichier_metadata):
         fichier metadata format DataFrame
     """
     #Emplacement des pluviometres
-    pluvio_xyz = pd.read_csv(emplacements_pluvios)
-    pluvio_xyz = pluvio_xyz.set_index('SONDEID')
-    pluvio_xyz = pluvio_xyz[['X','Y','ELEV_1']]
-    pluvio_xyz = pluvio_xyz.rename(columns={'ELEV_1': 'Z'})
-    pluvio_xyz = pluvio_xyz.apply(pd.to_numeric) 
-    pluvio_xyz[['X','Y','Z']] = np.floor(pluvio_xyz[['X','Y','Z']]*10**6)/10**6
-    pluvio_xyz.index = pluvio_xyz.index.astype(str)
+    pluvio_xy = pd.read_csv(emplacements_pluvios)
+    pluvio_xy = pluvio_xy.set_index('SONDEID')
+    pluvio_xy = pluvio_xy[['Latitude','Longitude']]
+    pluvio_xy = pluvio_xy.apply(pd.to_numeric) 
+    pluvio_xy.index = pluvio_xy.index.astype(str)
     
     fichiers = glob.glob(os.path.join(dossier_single_raingauge,
                     'precip_complete_*.csv'))
@@ -150,8 +148,9 @@ def metadata(emplacements_pluvios, dossier_single_raingauge, fichier_metadata):
         start_datetime = df.index.min()
         end_datetime = df.index.max()
 
-        latitude = pluvio_xyz.loc[station_id, 'Y']
-        longitude = pluvio_xyz.loc[station_id, 'X']
+        # Coordonnees
+        latitude = pluvio_xy.loc[str(station_id), 'Latitude']
+        longitude = pluvio_xy.loc[str(station_id), 'Longitude']
         
         metadata_list.append({
             'station_id': station_id,
@@ -161,7 +160,7 @@ def metadata(emplacements_pluvios, dossier_single_raingauge, fichier_metadata):
             'end_datetime': end_datetime,
             'path': os.path.abspath(fichier)})
         
-    metadata_df = pd.DataFrame( metadata_list, columns=['station_id','latitude',
+    metadata_df = pd.DataFrame(metadata_list, columns=['station_id','latitude',
                 'longitude', 'start_datetime','end_datetime','path'])
     
     metadata_df.to_csv(fichier_metadata, index=False)
