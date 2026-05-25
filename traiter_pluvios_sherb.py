@@ -9,14 +9,13 @@ Ville de Sherbrooke.
 - "single_raingauge" : Creer un fichier des precipitations completes propre a chaque pluviometre
 - "metadata" : Creer le fichier metadata utiliser par le module rainfallQC
 
-- "interpolation_IDW_grid" : Effectuer une interpolation par pondération inverse
-    de la distance (IDW) des données des pluviometres sur une grille couvrant la 
-    region etudiee avec "metpy.interpolate.inverse_distance_to_grid"
-- "interpolation_IDW_point" : Effectuer une interpolation par pondération inverse
-    de la distance (IDW) des données des pluviometres sur une grille couvrant la 
-    region etudiee avec "metpy.interpolate.inverse_distance_to_points"
 - "krig_ordinaire_pluvio" : Effectuer un krigeage ordinaire des donnees des 
     pluviometres sur une grille radar couvrant la region etudiee
+- "krig_derive_pluvio" : Effectuer un krigeage avec derive externe des donnees des 
+    pluviometres sur une grille radar couvrant la region etudiee où la derive est l'altitude
+
+- "figures_periode" : Tracer une carte radar pour un seul pas de temps
+    Option : Tracer des figures comparant les obsevations et les valeurs estimees
 
 - "format_pcswmm" : Formater les resulats pour les rendre compatibles avec PCSWMM
 
@@ -326,11 +325,6 @@ def interpolation_IDW_points(radar_grid, emplacements_pluvios, donnees_pluvios, 
 
 def krig_ordinaire_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios, chemin_resultats):
     """
-    Notes
-    ----------
-    Le variogramme n'est pas bon (https://github.com/GeoStat-Framework/PyKrige/discussions/204)
-    il faut revoir les parametres
-    
     Parameters
     ----------
     radar_grid : Chaine de caracteres
@@ -421,7 +415,105 @@ def krig_ordinaire_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios, che
     return resultats, donnees_pluvios
 
 
-def figures_pkl(data_calcul, radar_grid, emplacements_pluvios, donnees_pluvios, date_heure, methode_calcul):
+def krig_derive_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios, chemin_resultats):
+    """    
+    Parameters
+    ----------
+    radar_grid : Chaine de caracteres
+        Chemin vers le fichier .csv contenant les coordonnees des cellules ou les precip sont krigees.
+        C'est une grille 500 x 500 m (*radar_grid_xyz.csv)
+    emplacements_pluvios : Chaine de caracteres
+        Chemin vers le fichier .csv contenant les coordonnees 'x' et 'y', en metre, des pluviometres
+        (*pluvio_xyz.csv)
+    donnees_pluvios : Chaine de caracteres
+        Chemin vers le fichier .csv contenant les donnees de tous les pluviometres et pour tous
+        les pas de temps de la periode (*precip_complete.csv)
+    chemin_resultats : Chaine de caracteres
+        Chemin vers le dictionnaire de dataframe, soit "resultats" qui est retourne par la fonction
+
+    Returns
+    -------
+    resultats : Dictionary
+        Dictionnaire ou on retrouve un dataframe pour chaque pas de temps.
+        Chaque df a une colonne 'x', 'y' (representant chaque case dans la grille radar), 'estimation' et 'variance'
+        Pour selectionner 1 seule grille : exemple : resultats[pd.to_datetime("2025-05-17 13:30:00")]
+    """
+    # Grille radar - centroides xyz (500x500m)
+    radar_grid = pd.read_csv(radar_grid)
+    radar_grid = radar_grid.set_index('id')
+    radar_grid = radar_grid[['X','Y','ELEV_1']]
+    radar_grid = radar_grid.rename(columns={'ELEV_1': 'Z'})
+    radar_grid = radar_grid.apply(pd.to_numeric)
+    radar_grid[['X','Y','Z']] = np.floor(radar_grid[['X','Y','Z']]*10**6)/10**6
+
+    gx = np.array(radar_grid['X'])
+    gy = np.array(radar_grid['Y'])
+    gz = np.array(radar_grid['Z'])
+    
+    # Coordonnees xyz des pluviometres
+    pluvio_xyz = pd.read_csv(emplacements_pluvios)
+    pluvio_xyz = pluvio_xyz.set_index('SONDEID')
+    pluvio_xyz = pluvio_xyz[['X','Y','ELEV_1']]
+    pluvio_xyz = pluvio_xyz.rename(columns={'ELEV_1': 'Z'})
+    pluvio_xyz = pluvio_xyz.apply(pd.to_numeric) 
+    pluvio_xyz[['X','Y','Z']] = np.floor(pluvio_xyz[['X','Y','Z']]*10**6)/10**6
+    
+    # Donnees pluviometres
+    donnees_pluvios = pd.read_csv(donnees_pluvios)
+    donnees_pluvios = donnees_pluvios.set_index('Unnamed: 0')
+    donnees_pluvios = donnees_pluvios.rename_axis('Temps')
+    donnees_pluvios.index = pd.to_datetime(donnees_pluvios.index)
+    donnees_pluvios = donnees_pluvios.apply(pd.to_numeric) 
+    
+    #Rassembler les donnees des pluviometres aux pluviometres
+    stations = donnees_pluvios.columns.values
+    temps = donnees_pluvios.index
+    df = pd.DataFrame(index=temps)
+
+    for station in pluvio_xyz.index :
+        df[f'X_{station}'] = pluvio_xyz.loc[station, 'X']
+        df[f'Y_{station}'] = pluvio_xyz.loc[station, 'Y']
+        df[f'Z_{station}'] = pluvio_xyz.loc[station, 'Z']
+        df[f'precip_{station}'] = donnees_pluvios[station]
+
+    #Krigeage
+    resultats = {}
+    for t in temps :
+        ligne = df.loc[t]       #Info des pluviometres pour 1 pas de temps
+
+        x_val = np.array([ligne[f"X_{st}"]     for st in stations])        #Coordonnees X des pluviometres
+        y_val = np.array([ligne[f"Y_{st}"]     for st in stations])        #Coordonnees Y des pluviometres
+        z_val = np.array([ligne[f"Z_{st}"]     for st in stations])        #Coordonnees Z des pluviometres
+        precip = np.array([ligne[f"precip_{st}"] for st in stations])      #Precip aux pluviometres
+
+        #DataFrame du pas de temps
+        result_t = pd.DataFrame({"x":gx, "y":gy, "z":gz,"estimation":np.nan, "variance":np.nan},
+                                index= radar_grid.index)
+
+        if len(precip) > 0 and not np.all(np.isnan(precip)):
+
+            uk = UniversalKriging(x_val, y_val, precip,
+                variogram_model='spherical', nlags=8,
+
+                drift_terms=['specified'],
+                specified_drift = [z_val],
+
+                verbose=False, enable_plotting=False, pseudo_inv=True)
+
+            estim, var = uk.execute("points", gx, gy, specified_drift_arrays=[gz])
+
+            result_t["estimation"] = estim
+            result_t["variance"] = var
+        
+        resultats[t] = result_t
+         
+    with open(chemin_resultats, "wb") as f:
+        pickle.dump(resultats, f)
+    
+    return resultats, donnees_pluvios
+
+
+def figures_periode(data_calcul, radar_grid, emplacements_pluvios, donnees_pluvios, date_debut, date_fin, comparaison):
     """
     Parameters
     ----------
@@ -437,12 +529,14 @@ def figures_pkl(data_calcul, radar_grid, emplacements_pluvios, donnees_pluvios, 
     donnees_pluvios : Chaine de caracteres
         Chemin vers le fichier .csv contenant les donnees de tous les pluviometres et pour tous
         les pas de temps de la periode (*precip_complete.csv)
-    date_heure : chaine de caracteres
-        Pas de temps observe, avec un format comme cet exemple : "2025-05-17 13:30:00"
-    methode_calcul : Int
-        1 : Si la methode de calcul est "interpolation IDW"
-        2 : Si la methode de calcul est "krigeage ordinaire"
-
+    date_debut : chaine de caracteres
+        Date du debut de la periode, avec un format comme cet exemple : "2025-05-17 13:30:00"
+    date_fin : chaine de caracteres
+        Date de la fin de la periode, avec un format comme cet exemple : "2025-05-17 13:30:00"
+    comparaison : int
+        Figure comparant la quantite de pluie observee et estimee
+        0 : non ; 1 : oui
+    
     Returns
     -------
     None
@@ -450,19 +544,14 @@ def figures_pkl(data_calcul, radar_grid, emplacements_pluvios, donnees_pluvios, 
     #Lire le dictionnaire des donnees calculees
     with open(data_calcul, "rb") as f:
         data = pickle.load(f)
-    donnees = data[pd.Timestamp(date_heure)]
+    #donnees = data[pd.Timestamp(date_heure)]
+    date_debut = pd.Timestamp(date_debut)
+    date_fin = pd.Timestamp(date_fin)
     
-    if methode_calcul == 1 :
-        pivot = donnees.pivot(index='Y', columns ='X', values='precip')   
-        x, y = np.meshgrid(pivot.columns.values, pivot.index.values)
-        precip_reshape = pivot.values
-    elif methode_calcul == 2 :
-        pivot = donnees.pivot(index='y', columns ='x', values='estimation')   
-        x, y = np.meshgrid(pivot.columns.values, pivot.index.values)
-        precip_reshape = pivot.values
-    else :
-        raise ValueError("Le paramètre 'methode_calcul' doit être 1 ou 2")
-
+    periode = [t for t in data.keys()
+        if date_debut <= pd.Timestamp(t) <= date_fin]
+    periode = sorted(periode)
+    
     #Grille radar - centroides xyz (500x500m)
     radar_grid = pd.read_csv(radar_grid)
     radar_grid = radar_grid.set_index('id')
@@ -495,84 +584,75 @@ def figures_pkl(data_calcul, radar_grid, emplacements_pluvios, donnees_pluvios, 
     donnees_pluvios = donnees_pluvios.apply(pd.to_numeric) 
     donnees_pluvios = donnees_pluvios[pluvio_xyz.index]
     
-    data_pluvio = donnees_pluvios.loc[pd.Timestamp(date_heure)]
-    data_pluvio = data_pluvio.sort_index()
-    data_pluvio = data_pluvio.rename('precip')
+    for date_heure in periode:
+        print(f"Traitement : {date_heure}")
+        donnees = data[pd.Timestamp(date_heure)]
 
-    valeurs_pluvio = pluvio_xyz.copy()
-    valeurs_pluvio['precip'] = data_pluvio
+        pivot = donnees.pivot(index='y',columns='x',values='estimation')
+        x, y = np.meshgrid(pivot.columns.values,pivot.index.values)
+        precip_reshape = pivot.values
+        
+        data_pluvio = donnees_pluvios.loc[pd.Timestamp(date_heure)]
+        data_pluvio = data_pluvio.sort_index()
+        data_pluvio = data_pluvio.rename('precip')
     
-    #Bornes des figures
-    min_obs=min(valeurs_pluvio['precip'])
-    max_obs=max(valeurs_pluvio['precip'])
+        valeurs_pluvio = pluvio_xyz.copy()
+        valeurs_pluvio['precip'] = data_pluvio   
     
-    min_grille= np.nanmin(precip_reshape)
-    max_grille= np.nanmax(precip_reshape)
-            
-    min_global=min([min_obs,min_grille])
-    max_global=max([max_obs,max_grille])
-    
-    norm = plt.Normalize(min_global, max_global)
-    
-    #FIGURE : Interpolation IDW
-    if methode_calcul == 1 :
+        #Bornes des figures
+        min_obs=min(valeurs_pluvio['precip'])
+        max_obs=max(valeurs_pluvio['precip'])
+        
+        min_grille= np.nanmin(precip_reshape)
+        max_grille= np.nanmax(precip_reshape)
+                
+        min_global=min([min_obs,min_grille])
+        max_global=max([max_obs,max_grille])
+        
+        norm = plt.Normalize(min_global, max_global)
+     
+        #FIGURE : Carte radar - krigeage avec derive externe                
         fig, ax = plt.subplots(figsize=(8,6))
         plt.pcolormesh(x, y, precip_reshape, shading='auto', cmap='Blues', norm=norm)
         plt.colorbar(label="Pluie (mm)")
         plt.xlabel("Longitude (m)")
         plt.ylabel("Latitude (m)")
-        plt.title(f"Interpolation IDW - {date_heure}")
-        
-        plt.scatter(valeurs_pluvio['X'], valeurs_pluvio['Y'],c=valeurs_pluvio['precip'].astype(float), 
-                    cmap='Blues', edgecolor='black',s=80, norm=norm)
-        
-        plt.show()
-    
-    #FIGURE : Krigeage ordinaire
-    elif methode_calcul == 2 :                
-        fig, ax = plt.subplots(figsize=(8,6))
-        plt.pcolormesh(x, y, precip_reshape, shading='auto', cmap='Blues', norm=norm)
-        plt.colorbar(label="Pluie (mm)")
-        plt.xlabel("Longitude (m)")
-        plt.ylabel("Latitude (m)")
-        plt.title(f"Krigeage ordinaire - {date_heure}")
+        plt.title(f"Krigeage avec dérive externe - {date_heure}")
         
         plt.scatter(valeurs_pluvio['X'], valeurs_pluvio['Y'], c=valeurs_pluvio['precip'].astype(float), 
                     cmap='Blues', edgecolor='black',s=80, norm=norm)
-    
-    else :
-        raise ValueError("Le paramètre 'figures' doit être 1 ou 2")
-    
-    
-    #FIGURE : Comparaison observation vs calculs
-    dist = cdist(coords_stations, coords_grille) #Distance entre station et grille
-    idx = np.argmin(dist, axis=1) #Indice du point grille le plus proche
-    
-    if methode_calcul == 1 :
-        estim_result = donnees['precip'].values #Valeurs interpolées aux stations
-        estim_station = pd.Series(estim_result[idx], index=pluvio_xyz.index, name='estim')
-    elif methode_calcul == 2 :
-        estim_result = donnees['estimation'].values #Valeurs interpolées aux stations
-        estim_station = pd.Series(estim_result[idx], index=pluvio_xyz.index, name='estim')
-    
-    comparaison = pd.concat([data_pluvio.rename('obs'), estim_station],axis=1)
-    comparaison['diff'] = np.abs(comparaison['obs'] - comparaison['estim'])
-    
-    comparaison.plot(y=['obs', 'estim'], kind='bar', figsize=(10,4))
-    plt.title("Comparaison des donnees observees et interpolees pour tous les pluviometres")
-    plt.ylabel("Précipitation (mm)")
-    plt.tight_layout()
-    plt.show()
-    
-    #Les stations autour de la zone etudiee
-    liste_stations = ['SPQ', 'CJC', 'ASC', 'SPH', 'JMJ']
-    comparaison_cut = comparaison.loc[comparaison.index.intersection(liste_stations)]
-    comparaison_cut.plot(y=['obs', 'estim'], kind='bar', figsize=(10,4))
-    plt.title("Comparaison des donnees observees et interpolees pour les pluviometres autour de la zone etudiee")
-    plt.ylabel("Précipitation (mm)")
-    plt.tight_layout()
-    plt.show()
         
+        #FIGURE : Comparaison observation vs calculs
+        if comparaison == 1 :
+            dist = cdist(coords_stations, coords_grille) #Distance entre station et grille
+            idx = np.argmin(dist, axis=1) #Indice du point grille le plus proche
+            
+            estim_result = donnees['estimation'].values #Valeurs interpolées aux stations
+            estim_station = pd.Series(estim_result[idx], index=pluvio_xyz.index, name='estim')
+            
+            df_comparaison = pd.concat([data_pluvio.rename('obs'), estim_station],axis=1)
+            df_comparaison['diff'] = np.abs(df_comparaison['obs'] - df_comparaison['estim'])
+            
+            df_comparaison.plot(y=['obs', 'estim'], kind='bar', figsize=(10,4))
+            plt.title("Comparaison des données observées et estimées pour tous les pluviomètres")
+            plt.ylabel("Précipitation (mm)")
+            plt.tight_layout()
+            plt.show()
+            
+            #Les stations autour de la zone etudiee
+            liste_stations = ['SPQ', 'CJC', 'ASC', 'SPH', 'JMJ']
+            comparaison_cut = df_comparaison.loc[df_comparaison.index.intersection(liste_stations)]
+            comparaison_cut.plot(y=['obs', 'estim'], kind='bar', figsize=(10,4))
+            plt.title("Comparaison des données observées et estimées pour les pluviomètres autour de la zone étudiée")
+            plt.ylabel("Précipitation (mm)")
+            plt.tight_layout()
+            plt.show()
+        
+        elif comparaison == 0 :
+            plt.show()
+        else :
+            raise ValueError("Le paramètre 'comparaison' doit être 0 ou 1")
+    
     return
 
 
