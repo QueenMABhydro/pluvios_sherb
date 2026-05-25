@@ -28,8 +28,8 @@ import numpy as np
 from pykrige import OrdinaryKriging
 import matplotlib.pyplot as plt
 import pickle
-from metpy.interpolate import inverse_distance_to_grid, inverse_distance_to_points
 from scipy.spatial.distance import cdist
+from pykrige.uk import UniversalKriging
 
 def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pas_temps):
     """
