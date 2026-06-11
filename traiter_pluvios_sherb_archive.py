@@ -11,6 +11,7 @@ Ville de Sherbrooke - Vieille fonctions
 - "interpolation_IDW_point" : Effectuer une interpolation par pondération inverse
     de la distance (IDW) des données des pluviometres sur une grille couvrant la 
     region etudiee avec "metpy.interpolate.inverse_distance_to_points"
+- "krig_derive_fixe_pluvio" : Effectuer un krigeage avec dérive externe et un variogramme FIXE
 - "visualiser_grille_IDW_pkl" : Figure illustrant les donnees interpolees (IDW) sous forme 
     de carte avec l'option d'une figure comparant les interpolations et les observations
 - "visualiser_grille_csv" : Figure illustrant les donnees krigees d'un pas de temps
@@ -184,6 +185,153 @@ def interpolation_IDW_points(radar_grid, emplacements_pluvios, donnees_pluvios, 
         pickle.dump(resultats, f)
 
     return donnees_pluvios, resultats
+
+
+def krig_derive_fixe_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios, chemin_resultats):
+    """
+    Parameters
+    ----------
+    radar_grid : Chaine de caracteres
+        Chemin vers le fichier .csv contenant les coordonnees des cellules ou les precip sont krigees.
+        C'est une grille 500 x 500 m (*radar_grid_xyz.csv)
+    emplacements_pluvios : Chaine de caracteres
+        Chemin vers le fichier .csv contenant les coordonnees 'x' et 'y', en metre, des pluviometres
+        (*pluvio_xyz.csv)
+    donnees_pluvios : Chaine de caracteres
+        Chemin vers le fichier .csv contenant les donnees de tous les pluviometres et pour tous
+        les pas de temps de la periode (*precip_complete.csv)
+    chemin_resultats : Chaine de caracteres
+        Chemin vers le dictionnaire de dataframe, soit "resultats" qui est retourne par la fonction
+
+    Returns
+    -------
+    resultats : Dictionary
+        Dictionnaire ou on retrouve un dataframe pour chaque pas de temps.
+        Chaque df a une colonne 'x', 'y' (representant chaque case dans la grille radar), 'estimation' et 'variance'
+        Pour selectionner 1 seule grille : exemple : resultats[pd.to_datetime("2025-05-17 13:30:00")]
+    """
+    # Grille radar - centroides xyz (500x500m)
+    radar_grid = pd.read_csv(radar_grid)
+    radar_grid = radar_grid.set_index('id')
+    radar_grid = radar_grid[['X','Y','ELEV_1']]
+    radar_grid = radar_grid.rename(columns={'ELEV_1': 'Z'})
+    radar_grid = radar_grid.apply(pd.to_numeric)
+    radar_grid[['X','Y','Z']] = np.floor(radar_grid[['X','Y','Z']]*10**6)/10**6
+
+    gx = np.array(radar_grid['X'])
+    gy = np.array(radar_grid['Y'])
+    gz = np.array(radar_grid['Z'])
+
+    # Coordonnees xyz des pluviometres
+    pluvio_xyz = pd.read_csv(emplacements_pluvios)
+    pluvio_xyz = pluvio_xyz.set_index('SONDEID')
+    pluvio_xyz = pluvio_xyz[['X','Y','ELEV_1']]
+    pluvio_xyz = pluvio_xyz.rename(columns={'ELEV_1': 'Z'})
+    pluvio_xyz = pluvio_xyz.apply(pd.to_numeric)
+    pluvio_xyz[['X','Y','Z']] = np.floor(pluvio_xyz[['X','Y','Z']]*10**6)/10**6
+
+    # Donnees pluviometres
+    donnees_pluvios = pd.read_csv(donnees_pluvios)
+    donnees_pluvios = donnees_pluvios.set_index('Unnamed: 0')
+    donnees_pluvios = donnees_pluvios.rename_axis('Temps')
+    donnees_pluvios.index = pd.to_datetime(donnees_pluvios.index)
+    donnees_pluvios = donnees_pluvios.apply(pd.to_numeric)
+
+    #Rassembler les donnees des pluviometres aux pluviometres
+    stations = donnees_pluvios.columns.values
+    temps = donnees_pluvios.index
+
+    #Variogramme fixe
+    coords = pluvio_xyz[["X","Y"]].values
+    mask_time = (donnees_pluvios > 0).sum(axis=1) >= 3
+    data_event = donnees_pluvios.loc[mask_time]
+
+    h_vals = []
+    gamma_vals = []
+
+    for t in data_event.index:
+        z = data_event.loc[t].values
+        mask = ~np.isnan(z)
+        z = z[mask]
+        c = coords[mask]
+
+        if len(z) < 3:
+            continue
+
+        for i, j in combinations(range(len(z)), 2):
+            h = np.linalg.norm(c[i] - c[j])
+            gamma = 0.5 * (z[i] - z[j])**2
+
+            h_vals.append(h)
+            gamma_vals.append(gamma)
+
+    h_vals = np.array(h_vals)
+    gamma_vals = np.array(gamma_vals)
+
+    nlags = 5
+    bins = np.linspace(0, np.max(h_vals), nlags + 1)
+
+    bin_centers = []
+    gamma_mean = []
+
+    for k in range(nlags):
+        mask = (h_vals >= bins[k]) & (h_vals < bins[k+1])
+
+        if np.sum(mask) > 5:
+            bin_centers.append(np.mean(h_vals[mask]))
+            gamma_mean.append(np.mean(gamma_vals[mask]))
+
+    bin_centers = np.array(bin_centers)
+    gamma_mean = np.array(gamma_mean)
+
+    # modèle sphérique INLINE
+    popt, _ = curve_fit(lambda h, nugget, sill, rang: np.where(h < rang,
+            nugget + sill * (1.5*(h/rang) - 0.5*(h/rang)**3),
+            nugget + sill),bin_centers,gamma_mean, p0=[0.1, 1.0, 5000],maxfev=10000)
+    nugget, sill, rang = popt
+
+    #Krigeage
+    resultats = {}
+    for t in temps:
+        ligne = donnees_pluvios.loc[t]
+
+        x_val = np.array([pluvio_xyz.loc[st, 'X'] for st in stations])
+        y_val = np.array([pluvio_xyz.loc[st, 'Y'] for st in stations])
+        z_val = np.array([pluvio_xyz.loc[st, 'Z'] for st in stations])
+        precip = np.array([ligne[st] for st in stations])
+
+        result_t = pd.DataFrame({"x": gx,"y": gy,"z": gz,
+            "estimation": np.nan,"variance": np.nan}, index=radar_grid.index)
+
+        # CAS : pas de pluie
+        if np.nansum(precip) == 0:
+            result_t["estimation"] = 0
+            result_t["variance"] = 0
+            resultats[t] = result_t
+            continue
+
+        mask = ~np.isnan(precip)
+        x_val = x_val[mask]
+        y_val = y_val[mask]
+        z_val = z_val[mask]
+        precip = precip[mask]
+
+        if len(precip) >= 3:
+            uk = UniversalKriging(x_val, y_val, precip,variogram_model='spherical',
+                variogram_parameters={"nugget": nugget,"sill": sill,"range": rang},
+                drift_terms=['specified'],specified_drift=[z_val],verbose=False,
+                enable_plotting=False,pseudo_inv=True)
+            estim, var = uk.execute("points",gx, gy,specified_drift_arrays=[gz])
+
+            result_t["estimation"] = estim
+            result_t["variance"] = var
+
+        resultats[t] = result_t
+
+    with open(chemin_resultats, "wb") as f:
+        pickle.dump(resultats, f)
+
+    return resultats, donnees_pluvios
 
 
 def visualiser_grille_IDW_pkl(grille_IDW, radar_grid, donnees_pluvios, emplacements_pluvios, date_heure, comparaison):
