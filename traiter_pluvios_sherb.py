@@ -13,6 +13,8 @@ Ville de Sherbrooke.
     pluviometres sur une grille radar couvrant la region etudiee
 - "krig_derive_pluvio" : Effectuer un krigeage avec derive externe des donnees des 
     pluviometres sur une grille radar couvrant la region etudiee où la derive est l'altitude
+- "valid_krig_pluvios" : Valider les resultats du krigeage en calculant des erreurs absolues, 
+    erreurs relatives, RMSE, MAE
 
 - "figures_periode" : Tracer une carte radar pour un seul pas de temps
     Option : Tracer des figures comparant les obsevations et les valeurs estimees
@@ -493,6 +495,213 @@ def krig_derive_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios, chemin
         pickle.dump(resultats, f)
     
     return resultats, donnees_pluvios
+
+
+def valid_krig_pluvios(data_krig, radar_grid, emplacements_pluvios, donnees_pluvios, date_debut, date_fin):
+    """
+    Parameters
+    ----------
+    data_krig : Chaine de caracteres
+        Chemin vers le fichier .pkl contenant les resultats du krigeage
+        Le dictionnaire doit etre structure par timestamps
+    radar_grid : Chaine de caracteres
+        Chemin vers le fichier .csv contenant la grille radar (coordonnees X, Y et altitude)
+        (*radar_grid_xyz.csv)
+    emplacements_pluvios : Chaine de caracteres
+        Chemin vers le fichier .csv contenant les coordonnees 'x' et 'y', en metre, des pluviometres
+        (*pluvio_xyz.csv)
+    donnees_pluvios : Chaine de caracteres
+        Chemin vers le fichier .csv contenant les observations de précipitations 
+        aux pluviometres (*precip_complete.csv)
+    date_debut : chaine de caracteres
+        Date du debut de la periode, avec un format comme cet exemple : "2025-05-17 13:30:00"
+    date_fin : chaine de caracteres
+        Date de la fin de la periode, avec un format comme cet exemple : "2025-05-17 13:30:00"
+
+    Returns
+    -------
+    rmse_global : float
+        RMSE global calcule sur toutes les stations et tous les pas de temps
+    rmse_glob_station : pandas.DataFrame
+        RMSE calcule individuellemenet pour chaque station
+    mae_global : float
+        MAE global sur l'ensemble des stations'
+    mae_glob_station : pandas.DataFrame
+        MAE calcule individuellemenet pour chaque station
+    erreur_abs_serie : pandas.DataFrame
+        Serie temporelle des erreurs absolues par station (en mm)
+    erreur_rel_serie : pandas.DataFrame
+        Serie temporelle des erreurs relatives (en %)
+    flags_serie_relatif : pandas.DataFrame
+        Tableau de classification des erreurs relatives :
+            0 = bonne performance (≤ 20 %) ; 1 = erreur modérée (20–40 %)
+            2 = erreur élevée (40–60 %) ; 3 = très mauvaise performance (> 60 %)
+            4 = faible pluie (cas où l’interprétation relative est instable)
+    """
+    #Lire le dictionnaire des donnees calculees
+    with open(data_krig, "rb") as f:
+        data = pickle.load(f)
+
+    #Periode
+    date_debut = pd.Timestamp(date_debut)
+    date_fin = pd.Timestamp(date_fin)
+    periode = [t for t in data.keys()
+        if date_debut <= pd.Timestamp(t) <= date_fin]
+    periode = sorted(periode)
+
+    #Grille radar - centroides xyz (500x500m)
+    radar_grid = pd.read_csv(radar_grid)
+    radar_grid = radar_grid.set_index('id')
+    radar_grid = radar_grid[['X','Y','ELEV_1']]
+    radar_grid = radar_grid.rename(columns={'ELEV_1': 'Z'})
+    radar_grid = radar_grid.apply(pd.to_numeric)
+    radar_grid[['X','Y','Z']] = np.floor(radar_grid[['X','Y','Z']]*10**6)/10**6
+
+    gx = np.array(radar_grid['X'])
+    gy = np.array(radar_grid['Y'])
+    coords_grille = np.column_stack((gx, gy))
+
+    #Emplacements des pluviometres
+    pluvio_xyz = pd.read_csv(emplacements_pluvios)
+    pluvio_xyz = pluvio_xyz.set_index('SONDEID')
+    pluvio_xyz = pluvio_xyz[['X','Y','ELEV_1']]
+    pluvio_xyz = pluvio_xyz.rename(columns={'ELEV_1': 'Z'})
+    pluvio_xyz = pluvio_xyz.apply(pd.to_numeric)
+    pluvio_xyz[['X','Y','Z']] = np.floor(pluvio_xyz[['X','Y','Z']]*10**6)/10**6
+
+    xpluvio = np.array(pluvio_xyz['X'])
+    ypluvio = np.array(pluvio_xyz['Y'])
+    coords_stations = np.column_stack((xpluvio, ypluvio))
+
+    #Donnees des pluviometres
+    donnees_pluvios = pd.read_csv(donnees_pluvios)
+    donnees_pluvios = donnees_pluvios.set_index('Unnamed: 0')
+    donnees_pluvios = donnees_pluvios.rename_axis('Temps')
+    donnees_pluvios.index = pd.to_datetime(donnees_pluvios.index)
+    donnees_pluvios = donnees_pluvios.apply(pd.to_numeric)
+    donnees_pluvios = donnees_pluvios[pluvio_xyz.index]
+
+    #Distances
+    dist = cdist(coords_stations, coords_grille)
+    idx = np.argmin(dist, axis=1)
+
+    #Dictionnaire
+    erreurs_stations = {station: []
+        for station in pluvio_xyz.index}
+
+    erreur_abs_serie = []
+    erreur_rel_serie = []
+    flags_serie_relatif = []
+    erreurs_glob = []
+
+    #Boucle
+    for t in periode :
+        donnees_estim = data[t]
+
+        estim_grille = donnees_estim['estimation'].values
+        estim_station = estim_grille[idx]
+
+        obs_station = (donnees_pluvios.loc[pd.Timestamp(t),
+                    pluvio_xyz.index].values)
+
+        ligne_temps = {'Temps': pd.Timestamp(t)}
+        ligne_temps_rel = {'Temps': pd.Timestamp(t)}
+        ligne_temps_flag = {'Temps': pd.Timestamp(t)}
+
+        for i, station in enumerate(pluvio_xyz.index):
+            obs = obs_station[i]
+            estim = estim_station[i]
+
+            if not np.isnan(obs) and not np.isnan(estim):
+                erreur = obs - estim
+                erreurs_stations[station].append(erreur)
+                erreurs_glob.append(erreur)
+                
+                #Erreur absolue (mm)
+                erreur_abs_inst = np.abs(erreur)
+                ligne_temps[station] = erreur_abs_inst
+                
+                #Erreur relative (%)
+                if obs > 0:
+                    erreur_rel_inst = np.abs(erreur) / obs * 100
+                else:
+                    erreur_rel_inst = np.nan
+                
+                ligne_temps_rel[station] = erreur_rel_inst
+                
+                #Flags erreur relative
+                if np.isnan(obs) or np.isnan(estim):
+                    flag = np.nan
+                elif obs == 0 :
+                    flag = np.nan
+                elif obs < 0.2: #Faible pluie
+                    flag = 4
+                elif np.isnan(erreur_rel_inst):
+                    flag = np.nan
+                elif erreur_rel_inst <= 20:
+                    flag = 0
+                elif erreur_rel_inst <= 40:
+                    flag = 1
+                elif erreur_rel_inst <= 60:
+                    flag = 2
+                else:
+                    flag = 3
+                
+                ligne_temps_flag[station] = flag
+
+            else:
+                ligne_temps[station] = np.nan
+                ligne_temps_rel[station] = np.nan
+                ligne_temps_flag[station] = np.nan
+
+        erreur_abs_serie.append(ligne_temps)
+        erreur_rel_serie.append(ligne_temps_rel)
+        flags_serie_relatif.append(ligne_temps_flag)
+
+    # RMSE et MAE
+    rmse_glob_station = {}
+    mae_glob_station = {}
+
+    for station, erreurs in erreurs_stations.items():
+        erreurs = np.array(erreurs)
+
+        if len(erreurs) == 0:
+            rmse_glob_station[station] = np.nan
+            mae_glob_station[station] = np.nan
+        else:
+            rmse_glob_station[station] = np.sqrt(np.mean(erreurs**2))
+            mae_glob_station[station] = np.mean(np.abs(erreurs))
+
+    rmse_glob_station = pd.DataFrame([rmse_glob_station])
+    mae_glob_station = pd.DataFrame([mae_glob_station])
+
+    erreurs_globales = np.array(erreurs_glob)
+    
+    rmse_global = np.sqrt(np.mean(erreurs_globales**2)) if len(erreurs_globales) > 0 else np.nan
+    mae_global = np.mean(np.abs(erreurs_globales)) if len(erreurs_globales) > 0 else np.nan
+
+    #Mettre en DataFrame
+    erreur_abs_serie = pd.DataFrame(erreur_abs_serie)
+    erreur_abs_serie = erreur_abs_serie.set_index('Temps')
+
+    erreur_rel_serie = pd.DataFrame(erreur_rel_serie)
+    erreur_rel_serie = erreur_rel_serie.set_index('Temps')
+
+    flags_serie_relatif = pd.DataFrame(flags_serie_relatif)
+    flags_serie_relatif = flags_serie_relatif.set_index('Temps')
+
+    # FIGURE - boxplot
+    plt.figure(figsize=(14,6))
+    erreur_abs_serie.boxplot()
+    plt.ylabel('Erreur absolue (mm)')
+    plt.xlabel('Pluviomètre')
+    plt.title('Distribution des erreurs absolues par pluviomètre')
+    plt.xticks(rotation=90)
+    plt.tight_layout()
+    plt.show()
+    
+    return (rmse_global, rmse_glob_station, mae_global, mae_glob_station, erreur_abs_serie,
+    erreur_rel_serie, flags_serie_relatif)
 
 
 def figures_periode(data_calcul, radar_grid, emplacements_pluvios, donnees_pluvios, date_debut, date_fin, comparaison):
