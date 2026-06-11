@@ -21,8 +21,7 @@ Ville de Sherbrooke.
 
 @author: Marie-Amelie Boucher, USherbrooke
 """
-import os
-import glob
+from pathlib import Path
 import pandas as pd
 import numpy as np
 from pykrige import OrdinaryKriging
@@ -30,139 +29,122 @@ import matplotlib.pyplot as plt
 import pickle
 from scipy.spatial.distance import cdist
 from pykrige.uk import UniversalKriging
+from itertools import combinations
+from scipy.optimize import curve_fit
 
-def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pas_temps):
+def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pasdetemps):
     """
     Parameters
     ----------
     fichier_o : chaine de caracteres
         Chemin vers le fichier .csv des donnees brutes des pluviometres
         Telecharger sur le site de la ville de Sherbrooke: https://pluviometres.ville.sherbrooke.qc.ca/
-        *Le Excel provenant du site est .xls et doit etre change pour .csv prealablement
+        *Le fichier provenant du site est .xls et doit etre converti en .csv prealablement
     fichier_modif : chaine de caracteres
-        Chemin et nom du fichier de destination (AVEC les dates manquantes ajoutees). format csv
+        Chemin et nom du fichier de destination (AVEC les dates manquantes ajoutees) en format csv
     date_debut : chaine de caracteres
-        Date de debut de la periode d'interet. Exemple: '2018-01-01'
+        Date de debut de la periode d'interet. Exemple : '2018-01-01'
     date_fin : chaine de caracteres
-        Date de fin de la periode d'interet. Exemple: '2018-12-31'
-    pas_temps : chaine de caracteres
-        Pas de temps a utiliser dans le fichier de destination. Exemple: 5 minutes = '5min'
-        La liste des frequences possibles est ici:
-        https://pandas.pydata.org/pandas-docs/stable/user_guide/timeseries.html#timeseries-offset-aliases
+        Date de fin de la periode d'interet. Exemple : '2018-12-31'
+    pasdetemps : chaine de caracteres
+        Resolution temporelle des donnees
+        Valeurs supportees : "5min" et "1h"
 
     Returns
     -------
-    donnees_pluvio_complet: data frame (Enregistre en format csv)
-        Contient une serie complete dans laquelle les donnees manquantes sont identifiees par des NaN
+    donnees_pluvio_complet: pandas.DataFrame
+        Serie temporelle complete couvrant la periode demandee
+        Les pas de temps manquant sont ajoutes et remplis avec des NaN
+        Le DataFrame est enregiste en format .csv
     """
+    df = pd.read_csv(fichier_o, sep=';')
 
-    df = pd.read_csv(fichier_o, sep=',')                                                #Lire donnees brutes
+    if str(df.iloc[-1, 0]).strip().upper() == "TOTAL":
+        df = df.iloc[:-1]
 
-    if str(df.iloc[-1, 0]).strip().upper() == "TOTAL":                                  #Enlever la derniere ligne "TOTAL" du fichier
-        df = df.iloc[:-1]                                                               #Qui est propre au site de la ville de Sherbrooke
-
-    df['Date'] = pd.to_datetime(df['Date'], format='%m/%d/%Y', errors='coerce')         #Mettre les dates en index
+    df['Date'] = pd.to_datetime(df['Date'], format='%Y-%m-%d', errors='coerce')
     df = df.set_index('Date')
 
-    df.index = pd.to_datetime(
-        df.index.date.astype(str) + ' ' + df['Période'].str.split(' à ').str[0])        #Inclure le temps a l'index
-    df = df.drop(columns='Période')
+    if pasdetemps == "5min":
+        df.index = pd.to_datetime(
+            df.index.date.astype(str) + ' ' + df['Période'].str.split(' à ').str[0])
+        df = df.drop(columns='Période')
 
-    serie_index = pd.date_range(start= date_debut , end= date_fin, freq= pas_temps)     #Index de la serie complete
+    elif pasdetemps == "1h" :
+        df['Heure'] = (df['Période'].str.extract(r'(\d{1,2})h')[0].str.zfill(2) + ':00:00')
+        df['Date'] = pd.to_datetime(df['Date'].dt.strftime('%Y-%m-%d') + ' ' + df['Heure'])
+        df = df.set_index('Date')
+        df = df.drop(columns=['Période', 'Heure'])
 
-    donnees_pluvio_complet = pd.DataFrame(index =serie_index, columns=df.columns)       #Serie vide complete
-    donnees_pluvio_complet.update(df)                                                   #Ajout des donnees des pluviometres
+    else :
+        raise ValueError(f"pasdetemps='{pasdetemps}' non supporté. "
+            "Utiliser '5min' ou '1h'.")
 
-    donnees_pluvio_complet.to_csv(fichier_modif, sep=',')                               #Enregistrer le dataframe en .csv
+    serie_index = pd.date_range(start= date_debut , end= date_fin, freq= pasdetemps)
+
+    donnees_pluvio_complet = pd.DataFrame(index =serie_index, columns=df.columns)
+    donnees_pluvio_complet.update(df)
+
+    donnees_pluvio_complet.to_csv(fichier_modif, sep=',')
 
     return donnees_pluvio_complet
 
 
-def single_raingauge(precip_complete, dossier_sortie):
+def single_raingauge_metadata(precip_complete, emplacements_pluvios, dossier_sortie, fichier_metadata):
     """
     Parameters
     ----------
     precip_complete : chaine de caracteres
         Chemin vers le fichier csv des precipitations completes de toutes les stations
         (precip_complete.csv)
-    dossier_sortie : chaine de caracteres
-        Chemin et nom du dossier de destination 
-
-    Returns
-    -------
-    Le format des fichiers enregistres est csv
-    """
-    donnees_precip_complet = pd.read_csv(precip_complete,index_col=0,parse_dates=True)
-    
-    os.makedirs(dossier_sortie, exist_ok=True) #creer dossier s'il n'existe pas
-    
-    for station in donnees_precip_complet.columns:
-        df_station = donnees_precip_complet[[station]]
-        nom_fichier = f"precip_complete_{station}.csv"
-        chemin_fichier = os.path.join(dossier_sortie, nom_fichier)
-        df_station.to_csv(chemin_fichier, sep=',')    
-
-    return
-
-
-def metadata(emplacements_pluvios, dossier_single_raingauge, fichier_metadata):
-    """
-    Parameters
-    ----------
     emplacements_pluvios : chaine de caracteres
-        Chemin vers le fichier .csv des coordonnees des emplacements des pluviometres 
+        Chemin vers le fichier .csv des coordonnees des emplacements des pluviometres
         (pluvio_xyz.csv)
-    dossier_single_raingauge : chaine de caracteres
-        Chemin vers le dossier contenant les fichiers .csv des precipitations de 
-        chaque pluviometre
+    dossier_sortie : chaine de caracteres
+        Chemin et nom du dossier de destination des fichiers individuels
     fichier_metadata : chaine de caracteres
-        Chemin et nom du fichier de destination, format .csv
-        Les colonnes sont : station_id, latitude, longitude,
-        start_datetime, end_datetime et path
+        Chemin et nom du fichier de destination (.csv)
 
     Returns
     -------
-    metadata_df : DataFrame
-        fichier metadata format DataFrame
+    metadata_df : pandas.DataFrame
+        Tableau metadata contenant : station_id, latitude, longitude, start_datetime, end_datetime et path
     """
-    #Emplacement des pluviometres
+    # Donnees de precipitations
+    donnees_precip_complet = pd.read_csv(precip_complete,sep=';',index_col=0,parse_dates=True)
+
+    # Emplacement des pluviometres
     pluvio_xy = pd.read_csv(emplacements_pluvios)
     pluvio_xy = pluvio_xy.set_index('SONDEID')
     pluvio_xy = pluvio_xy[['Latitude','Longitude']]
-    pluvio_xy = pluvio_xy.apply(pd.to_numeric) 
+    pluvio_xy = pluvio_xy.apply(pd.to_numeric)
     pluvio_xy.index = pluvio_xy.index.astype(str)
-    
-    fichiers = glob.glob(os.path.join(dossier_single_raingauge,
-                    'precip_complete_*.csv'))
+
+    # Creer le dossier de sortie
+    dossier_sortie = Path(dossier_sortie)
+    dossier_sortie.mkdir(exist_ok=True)
+
     metadata_list = []
-    
-    for fichier in fichiers:
-        nom = os.path.basename(fichier)
-        # Extraire station ID
-        station_id = (nom.replace('precip_complete_', '').replace('.csv', ''))
-        # Lire fichier station
-        df = pd.read_csv(fichier,index_col=0,parse_dates=True)
 
-        # Dates
-        start_datetime = df.index.min()
-        end_datetime = df.index.max()
+    for station in donnees_precip_complet.columns:
+        # Fichier individuel
+        df_station = donnees_precip_complet[[station]]
+        chemin_fichier = dossier_sortie / f"precip_complete_{station}.csv"
+        df_station.to_csv(chemin_fichier, sep=';')
 
-        # Coordonnees
-        latitude = pluvio_xy.loc[str(station_id), 'Latitude']
-        longitude = pluvio_xy.loc[str(station_id), 'Longitude']
-        
+        # Metadata
         metadata_list.append({
-            'station_id': station_id,
-            'latitude': latitude,
-            'longitude': longitude,
-            'start_datetime': start_datetime,
-            'end_datetime': end_datetime,
-            'path': os.path.abspath(fichier)})
-        
-    metadata_df = pd.DataFrame(metadata_list, columns=['station_id','latitude',
-                'longitude', 'start_datetime','end_datetime','path'])
-    
-    metadata_df.to_csv(fichier_metadata, index=False)
+            'station_id': station,
+            'latitude': pluvio_xy.loc[str(station), 'Latitude'],
+            'longitude': pluvio_xy.loc[str(station), 'Longitude'],
+            'start_datetime': df_station.index.min(),
+            'end_datetime': df_station.index.max(),
+            'path': str(chemin_fichier.resolve())})
+
+    metadata_df = pd.DataFrame(metadata_list,
+        columns=['station_id','latitude','longitude','start_datetime','end_datetime','path'])
+
+    metadata_df.to_csv(fichier_metadata, sep=';', index=False)
 
     return metadata_df
 
