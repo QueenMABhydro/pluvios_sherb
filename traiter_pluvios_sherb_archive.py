@@ -12,6 +12,9 @@ Ville de Sherbrooke - Vieille fonctions
     de la distance (IDW) des données des pluviometres sur une grille couvrant la 
     region etudiee avec "metpy.interpolate.inverse_distance_to_points"
 - "krig_derive_fixe_pluvio" : Effectuer un krigeage avec dérive externe et un variogramme FIXE
+
+- "valid_krig" : Calcul de RMSE pour valider le krigeage
+
 - "visualiser_grille_IDW_pkl" : Figure illustrant les donnees interpolees (IDW) sous forme 
     de carte avec l'option d'une figure comparant les interpolations et les observations
 - "visualiser_grille_csv" : Figure illustrant les donnees krigees d'un pas de temps
@@ -332,6 +335,90 @@ def krig_derive_fixe_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios, c
         pickle.dump(resultats, f)
 
     return resultats, donnees_pluvios
+
+
+def valid_krig(data_krig, radar_grid, emplacements_pluvios, donnees_pluvios, date_debut, date_fin):
+    #Lire le dictionnaire des donnees calculees
+    with open(data_krig, "rb") as f:
+        data = pickle.load(f)
+    #Periode
+    date_debut = pd.Timestamp(date_debut)
+    date_fin = pd.Timestamp(date_fin)
+    periode = [t for t in data.keys()
+        if date_debut <= pd.Timestamp(t) <= date_fin]
+    periode = sorted(periode)
+
+    #Grille radar - centroides xyz (500x500m)
+    radar_grid = pd.read_csv(radar_grid)
+    radar_grid = radar_grid.set_index('id')
+    radar_grid = radar_grid[['X','Y','ELEV_1']]
+    radar_grid = radar_grid.rename(columns={'ELEV_1': 'Z'})
+    radar_grid = radar_grid.apply(pd.to_numeric)
+    radar_grid[['X','Y','Z']] = np.floor(radar_grid[['X','Y','Z']]*10**6)/10**6
+
+    gx = np.array(radar_grid['X'])
+    gy = np.array(radar_grid['Y'])
+    coords_grille = np.column_stack((gx, gy))
+
+    #Emplacements des pluviometres
+    pluvio_xyz = pd.read_csv(emplacements_pluvios)
+    pluvio_xyz = pluvio_xyz.set_index('SONDEID')
+    pluvio_xyz = pluvio_xyz[['X','Y','ELEV_1']]
+    pluvio_xyz = pluvio_xyz.rename(columns={'ELEV_1': 'Z'})
+    pluvio_xyz = pluvio_xyz.apply(pd.to_numeric)
+    pluvio_xyz[['X','Y','Z']] = np.floor(pluvio_xyz[['X','Y','Z']]*10**6)/10**6
+
+    xpluvio = np.array(pluvio_xyz['X'])
+    ypluvio = np.array(pluvio_xyz['Y'])
+    coords_stations = np.column_stack((xpluvio, ypluvio))
+
+    #Donnees des pluviometres
+    donnees_pluvios = pd.read_csv(donnees_pluvios)
+    donnees_pluvios = donnees_pluvios.set_index('Unnamed: 0')
+    donnees_pluvios = donnees_pluvios.rename_axis('Temps')
+    donnees_pluvios.index = pd.to_datetime(donnees_pluvios.index)
+    donnees_pluvios = donnees_pluvios.apply(pd.to_numeric)
+    donnees_pluvios = donnees_pluvios[pluvio_xyz.index]
+
+    #listes
+    rmse_pasdetemps = []
+    erreurs_glob = []
+    #Distances
+    dist = cdist(coords_stations, coords_grille)
+    idx = np.argmin(dist, axis=1)
+
+    #Boucle
+    for t in periode :
+        donnees_estim = data[t]
+
+        estim_grille = donnees_estim['estimation'].values
+        estim_station = estim_grille[idx]
+        obs_station = (donnees_pluvios.loc[pd.Timestamp(t),
+                    pluvio_xyz.index].values)
+
+        mask = (~np.isnan(obs_station) & ~np.isnan(estim_station))
+        obs_station = obs_station[mask]
+        estim_station = estim_station[mask]
+
+        if len(obs_station) == 0:
+            rmse_t = np.nan
+        else :
+            erreurs = obs_station - estim_station
+            erreurs_glob.extend(erreurs)
+            rmse_t = np.sqrt(np.mean(erreurs**2))
+
+        rmse_pasdetemps.append({'Temps': t,'RMSE': rmse_t})
+
+    #RMSE de l'evenement
+    erreurs_globales = np.array(erreurs_glob)
+    rmse_global = np.sqrt(np.mean(erreurs_globales**2))
+    rmse_serie = pd.DataFrame(rmse_pasdetemps)
+
+    #Filtre RMSE
+    seuil = 0.4
+    rmse_mauvais = rmse_serie[rmse_serie['RMSE'] > seuil]
+
+    return rmse_global, rmse_serie, rmse_mauvais
 
 
 def visualiser_grille_IDW_pkl(grille_IDW, radar_grid, donnees_pluvios, emplacements_pluvios, date_heure, comparaison):
