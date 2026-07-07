@@ -20,7 +20,7 @@ from matplotlib.colors import LinearSegmentedColormap, PowerNorm
 import matplotlib.pyplot as plt
 import contextily as ctx
 import pickle
-import geopandas as gpd
+from pyproj import Transformer
 
 def ajoute_extension(dossier_source, dossier_destination=None):
     """
@@ -149,81 +149,76 @@ def figures_PRECIPET(fichier_coords, fichier_pkl, chemin_figures=None):
     fichier_coords : Chaine de caracteres
         Chemin vers le fichier CSV contenant les coordonnes de la grille spatiale de la zone d'etude
     fichier_pkl : Chaine de caracteres
-        Chemin vers le dictionnaire PKL contenant les coordonnes (latitude et longitude), l'intensite (mm/h) 
+        Chemin vers le dictionnaire PKL contenant les coordonnes (latitude et longitude), l'intensite (mm/h)
         et les precipitations cumulees sur 6 minutes (mm) du produit PRECIP-ET
     chemin_figures : Chaine de caracteres (optionnel)
         Chemin vers le dossier ou les figures sont enregistrees en format PNG, dans l'heure locale
-        et dont les coordonnees sont reprojectees vers EPSG:2144 (MTM zone 7)
+        et dont les coordonnees sont reprojectees vers EPSG:32187 (NAD83 / MTM zone 7)
     """
     save_figures = chemin_figures is not None
     if save_figures:
         os.makedirs(chemin_figures, exist_ok=True)
-    
-    colors = ["#addd8e","#31a354","#ffff38","#f74d50","#7b3294"]
-    cmap = LinearSegmentedColormap.from_list("green_purple", colors)
-    
+
     with open(fichier_pkl, "rb") as f:
         donnees = pickle.load(f)
-    
+
     #Grille fixe
     coords = pd.read_csv(fichier_coords)
-    #Reprojection pour passer de EPSG:4326 en degres vers EPSG:2144 en metres
-    gdf = gpd.GeoDataFrame(coords, geometry=gpd.points_from_xy(coords["longitude"], coords["latitude"]),
-                           crs="EPSG:4326").to_crs(epsg=2144) #MTM zone 7
-    coords["x"] = gdf.geometry.x
-    coords["y"] = gdf.geometry.y
+    lat_unique = np.sort(coords["latitude"].unique())
+    lon_unique = np.sort(coords["longitude"].unique())
+    lon_grid, lat_grid = np.meshgrid(lon_unique, lat_unique)
 
-    x_unique = np.sort(coords["x"].unique())
-    y_unique = np.sort(coords["y"].unique())
-    x, y = np.meshgrid(x_unique, y_unique)
-    
-    vmax = max(np.nanmax(d["precip"].values) for d in donnees.values()) #Echelle de precip fixe
-    
-    #Pour garder comparer avec la resolution de 5 minutes
-    dates_filtrees = [d for d in sorted(donnees.keys()) 
+    #Reprojection
+    transformer = Transformer.from_crs("EPSG:4326", "EPSG:32187", always_xy=True)
+    x, y = transformer.transform(lon_grid, lat_grid)
+
+    #Constantes pour tracer les figures
+    colors = ["#addd8e","#31a354","#ffff38","#f74d50","#7b3294"]
+    cmap = LinearSegmentedColormap.from_list("green_purple", colors)
+    vmax = max(np.nanmax(d["precip"].values) for d in donnees.values())
+    norm = PowerNorm(gamma=0.5, vmin=0.1, vmax=vmax)
+
+    #Pas de temps a garder pour comparer avec la resolution de 5 minutes
+    dates_filtrees = [d for d in sorted(donnees.keys())
                       if pd.to_datetime(d, format="%Y%m%d%H_%M").minute in [0, 30]]
-    
+
     for date in dates_filtrees:
         #Decalage horaire
         date_utc = pd.to_datetime(date, format="%Y%m%d%H_%M", utc=True)
         date_local = date_utc.tz_convert("America/Montreal")
-        
         print(f"Traitement : {date_local}")
 
-        df = coords.merge(donnees[date], on=["latitude", "longitude"], how="left")
-        
-        pivot = df.pivot(index="y", columns="x", values="precip") #Avec les coords projetees
-        pivot = pivot.reindex(index=y_unique, columns=x_unique)
+        df = coords.merge(donnees[date][["latitude", "longitude", "precip"]],
+                          on=["latitude", "longitude"], how="left")
+
+        pivot = df.pivot(index="latitude", columns="longitude", values="precip")
+        pivot = pivot.reindex(index=lat_unique, columns=lon_unique)
 
         precip = pivot.values
-    
-        masked_precip = np.ma.masked_where(precip < 0.1, precip)
-    
-        norm = PowerNorm(gamma=0.5, vmin=0.1, vmax=vmax)
-        
+
+        masked_precip = np.ma.masked_where(np.isnan(precip) | (precip < 0.1), precip)
+
         fig, ax = plt.subplots(figsize=(8, 6))
-        
+
         pcm = ax.pcolormesh(x, y, masked_precip, shading="auto", cmap=cmap, norm=norm, alpha=0.7)
-        
+
         cbar = fig.colorbar(pcm, ax=ax)
         cbar.set_label("Pluie (mm)")
-        
+
         ax.set_title(f"PRECIP-ET - {date_local.strftime('%Y-%m-%d %H:%M')}")
         ax.set_xlabel("Longitude (m)")
         ax.set_ylabel("Latitude (m)")
-        
-        ax.set_xlim(x_unique.min(), x_unique.max())
-        ax.set_ylim(y_unique.min(), y_unique.max())
-        
+
+        ax.set_xlim(x.min(), x.max())
+        ax.set_ylim(y.min(), y.max())
+
         #Pour ajouter une basemap :
-        ctx.add_basemap(ax, crs="EPSG:2144", source=ctx.providers.OpenStreetMap.Mapnik)
-        
+        ctx.add_basemap(ax, crs="EPSG:32187", source=ctx.providers.OpenStreetMap.Mapnik)
+
         #Enregistrer les figures
         if save_figures :
             nom_fichier = f"carte_{date_local.strftime('%Y%m%d_%H%M')}.png"
             fig.savefig(os.path.join(chemin_figures, nom_fichier), dpi=300)
-        
+
         plt.show()
         plt.close(fig)
-    
-
