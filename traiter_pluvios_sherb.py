@@ -13,16 +13,20 @@ Ville de Sherbrooke.
     pluviometres sur une grille radar couvrant la region etudiee
 - "krig_derive_pluvio" : Effectuer un krigeage avec derive externe des donnees des 
     pluviometres sur une grille radar couvrant la region etudiee où la derive est l'altitude
+
+- "tracer_variogrammes" : Tracer les variogrammes afin d'en valider la performance
 - "valid_krig_pluvios" : Valider les resultats du krigeage en calculant des erreurs absolues, 
     erreurs relatives, RMSE, MAE
 
 - "figures_periode" : Tracer une carte radar pour un seul pas de temps
     Option : Tracer des figures comparant les obsevations et les valeurs estimees
+- "video_precip" : Faire un video mp4 ou gif a partir d'un ensemble de figures
 
 - "format_pcswmm" : Formater les resulats pour les rendre compatibles avec PCSWMM
 
 @author: Marie-Amelie Boucher, USherbrooke
 """
+import os
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -31,8 +35,10 @@ import matplotlib.pyplot as plt
 import pickle
 from scipy.spatial.distance import cdist
 from pykrige.uk import UniversalKriging
-from itertools import combinations
-from scipy.optimize import curve_fit
+from matplotlib.colors import LinearSegmentedColormap, PowerNorm
+import matplotlib.cm as cm
+import contextily as ctx
+import imageio.v2 as imageio
 
 def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pasdetemps):
     """
@@ -477,7 +483,7 @@ def krig_derive_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios, chemin
         if len(precip) > 0 and not np.all(np.isnan(precip)):
 
             uk = UniversalKriging(x_val, y_val, precip,
-                variogram_model='spherical', nlags=8,
+                variogram_model='spherical', nlags=5,
 
                 drift_terms=['specified'],
                 specified_drift = [z_val],
@@ -497,6 +503,154 @@ def krig_derive_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios, chemin
     return resultats, donnees_pluvios
 
 
+def tracer_variogrammes(emplacements_pluvios, donnees_pluvios, date_debut, date_fin, chemin_figures=None):
+    if chemin_figures is not None:
+        os.makedirs(chemin_figures, exist_ok=True)
+        chemin_parametres = os.path.join(chemin_figures, "parametres_variogrammes.txt")
+        fichier_parametres = open(chemin_parametres, "w", encoding="utf-8")
+    else:
+        fichier_parametres = None
+
+    # Coordonnees xyz des pluviometres
+    pluvio_xyz = pd.read_csv(emplacements_pluvios)
+    pluvio_xyz = pluvio_xyz.set_index('SONDEID')
+    pluvio_xyz = pluvio_xyz[['X','Y','ELEV_1']]
+    pluvio_xyz = pluvio_xyz.rename(columns={'ELEV_1': 'Z'})
+    pluvio_xyz = pluvio_xyz.apply(pd.to_numeric)
+    pluvio_xyz[['X','Y','Z']] = np.floor(pluvio_xyz[['X','Y','Z']]*10**6)/10**6
+
+    # Donnees pluviometres
+    donnees_pluvios = pd.read_csv(donnees_pluvios)
+    donnees_pluvios = donnees_pluvios.set_index('Unnamed: 0')
+    donnees_pluvios = donnees_pluvios.rename_axis('Temps')
+    donnees_pluvios.index = pd.to_datetime(donnees_pluvios.index)
+    donnees_pluvios = donnees_pluvios.apply(pd.to_numeric)
+
+    date_debut = pd.Timestamp(date_debut)
+    date_fin = pd.Timestamp(date_fin)
+    if date_fin < date_debut:
+        raise ValueError("date_fin doit être après date_debut")
+    donnees_pluvios = donnees_pluvios.loc[date_debut:date_fin]
+
+    stations = donnees_pluvios.columns.values
+    temps = donnees_pluvios.index
+
+    resultats = []
+    for t in temps :
+        print(f"Date : {t}")
+        if fichier_parametres:
+            fichier_parametres.write(f"\nDate : {t}\n")
+
+        precip = donnees_pluvios.loc[t].values.astype(float)
+
+        if np.all(np.isnan(precip)):
+            print("Aucune précipitation enregistrée (toutes NaN)")
+            if fichier_parametres:
+                fichier_parametres.write("Aucune précipitation enregistrée (toutes NaN)\n")
+            continue
+        try:
+            x = np.array([pluvio_xyz.loc[st, 'X'] for st in stations])
+            y = np.array([pluvio_xyz.loc[st, 'Y'] for st in stations])
+            z = np.array([pluvio_xyz.loc[st, 'Z'] for st in stations])
+            
+            uk = UniversalKriging(x, y, precip, variogram_model='spherical',
+                nlags=5, drift_terms=['specified'], specified_drift=[z],
+                verbose=False, enable_plotting=False, pseudo_inv=True)
+            """
+            krig = OrdinaryKriging(x, y, precip,variogram_model='spherical',
+                                   nlags=5, enable_plotting=False, verbose=False,
+                                   enable_statistics=False, coordinates_type='euclidean',
+                                   pseudo_inv=True, weight=False)
+            """
+            # Experimental
+            lags = np.asarray(uk.lags)
+            semivariance = np.asarray(uk.semivariance)
+            if len(lags) == 0:
+                print(f"{t} : aucun lag calculé")
+                continue
+
+            params = uk.variogram_model_parameters
+            partial_sill = params[0]
+            vrange = params[1]
+            nugget = params[2]
+            sill_total = partial_sill + nugget
+
+            if fichier_parametres:
+                fichier_parametres.write(f"Nombre de lags : {len(uk.lags)}\n")
+                fichier_parametres.write(f"lags : {uk.lags}\n")
+                fichier_parametres.write(f"semivariance : {uk.semivariance}\n")
+
+            # Theorique
+            h = np.linspace(0, max(lags) * 1.2, 500)
+            gamma = np.where(h <= vrange,
+                nugget + partial_sill *(1.5 * h / vrange - 0.5 * (h / vrange) ** 3),
+                sill_total)
+
+            #R^2
+            gamma_interp = np.interp(lags, h, gamma)
+            y_obs = semivariance
+            y_pred = gamma_interp
+            mask = ~np.isnan(y_obs) & ~np.isnan(y_pred)
+
+            if np.sum(mask) > 1:
+                ss_res = np.sum((y_obs[mask] - y_pred[mask])**2)
+                ss_tot = np.sum((y_obs[mask] - np.mean(y_obs[mask]))**2)
+
+                r2 = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
+            else:
+                r2 = np.nan
+
+            if fichier_parametres:
+                fichier_parametres.write(f"R^2 : {r2}\n")
+
+            resultats.append({"temps": t, "partial_sill": partial_sill,
+                              "range": vrange, "nugget": nugget, "r2": r2})
+
+            # Figures
+            fig, ax = plt.subplots(figsize=(8, 5))
+
+            ax.scatter(lags, semivariance, s=60, label="Variogramme expérimental")
+            ax.plot(h, gamma, linewidth=2, label="Modèle sphérique ajusté")
+
+            ax.set_title(f"Variogramme - {t:%Y-%m-%d %H:%M}")
+
+            ax.set_xlabel("Distance (m)")
+            ax.set_ylabel("Semi-variance")
+
+            ax.grid(True)
+
+            texte = (
+                f"Partial sill = {partial_sill:.3f}\n"
+                f"Range = {vrange:.0f} m\n"
+                f"Nugget = {nugget:.3f}\n"
+                f"R² = {r2:.3f}")
+
+            ax.text(0.98, 0.98, texte, transform=ax.transAxes,
+                ha="right", va="top", bbox=dict(facecolor="white"))
+
+            ax.legend()
+
+            # Enregistrer les figures
+            if chemin_figures is not None:
+                nom_fichier = f"variogramme_{t:%Y%m%d_%H%M}.png"
+                chemin_fichier = os.path.join(chemin_figures, nom_fichier)
+                plt.savefig(chemin_fichier, dpi=200, bbox_inches="tight")
+
+            plt.show()
+            plt.close(fig)
+
+        except Exception as e:
+            print(f"{t} : erreur : {e}")
+
+    resultats = pd.DataFrame(resultats)
+    resultats = resultats.set_index("temps")
+
+    if fichier_parametres :
+        fichier_parametres.close()
+
+    return resultats
+
+
 def valid_krig_pluvios(data_krig, radar_grid, emplacements_pluvios, donnees_pluvios, date_debut, date_fin):
     """
     Parameters
@@ -511,7 +665,7 @@ def valid_krig_pluvios(data_krig, radar_grid, emplacements_pluvios, donnees_pluv
         Chemin vers le fichier .csv contenant les coordonnees 'x' et 'y', en metre, des pluviometres
         (*pluvio_xyz.csv)
     donnees_pluvios : Chaine de caracteres
-        Chemin vers le fichier .csv contenant les observations de précipitations 
+        Chemin vers le fichier .csv contenant les observations de précipitations
         aux pluviometres (*precip_complete.csv)
     date_debut : chaine de caracteres
         Date du debut de la periode, avec un format comme cet exemple : "2025-05-17 13:30:00"
@@ -598,7 +752,8 @@ def valid_krig_pluvios(data_krig, radar_grid, emplacements_pluvios, donnees_pluv
     for t in periode :
         donnees_estim = data[t]
 
-        estim_grille = donnees_estim['estimation'].values
+        estim_grille = donnees_estim['estimation'].values   #Krigeage
+        #estim_grille = donnees_estim['precip'].values       #IDW
         estim_station = estim_grille[idx]
 
         obs_station = (donnees_pluvios.loc[pd.Timestamp(t),
@@ -616,19 +771,19 @@ def valid_krig_pluvios(data_krig, radar_grid, emplacements_pluvios, donnees_pluv
                 erreur = obs - estim
                 erreurs_stations[station].append(erreur)
                 erreurs_glob.append(erreur)
-                
+
                 #Erreur absolue (mm)
                 erreur_abs_inst = np.abs(erreur)
                 ligne_temps[station] = erreur_abs_inst
-                
+
                 #Erreur relative (%)
                 if obs > 0:
                     erreur_rel_inst = np.abs(erreur) / obs * 100
                 else:
                     erreur_rel_inst = np.nan
-                
+
                 ligne_temps_rel[station] = erreur_rel_inst
-                
+
                 #Flags erreur relative
                 if np.isnan(obs) or np.isnan(estim):
                     flag = np.nan
@@ -646,7 +801,7 @@ def valid_krig_pluvios(data_krig, radar_grid, emplacements_pluvios, donnees_pluv
                     flag = 2
                 else:
                     flag = 3
-                
+
                 ligne_temps_flag[station] = flag
 
             else:
@@ -676,7 +831,7 @@ def valid_krig_pluvios(data_krig, radar_grid, emplacements_pluvios, donnees_pluv
     mae_glob_station = pd.DataFrame([mae_glob_station])
 
     erreurs_globales = np.array(erreurs_glob)
-    
+
     rmse_global = np.sqrt(np.mean(erreurs_globales**2)) if len(erreurs_globales) > 0 else np.nan
     mae_global = np.mean(np.abs(erreurs_globales)) if len(erreurs_globales) > 0 else np.nan
 
@@ -699,12 +854,13 @@ def valid_krig_pluvios(data_krig, radar_grid, emplacements_pluvios, donnees_pluv
     plt.xticks(rotation=90)
     plt.tight_layout()
     plt.show()
-    
+
     return (rmse_global, rmse_glob_station, mae_global, mae_glob_station, erreur_abs_serie,
     erreur_rel_serie, flags_serie_relatif)
 
 
-def figures_periode(data_calcul, radar_grid, emplacements_pluvios, donnees_pluvios, date_debut, date_fin, comparaison):
+def figures_periode(data_calcul, radar_grid, emplacements_pluvios, donnees_pluvios, date_debut, date_fin,
+                    chemin_figures=None, comparaison=0):
     """
     Parameters
     ----------
@@ -724,25 +880,30 @@ def figures_periode(data_calcul, radar_grid, emplacements_pluvios, donnees_pluvi
         Date du debut de la periode, avec un format comme cet exemple : "2025-05-17 13:30:00"
     date_fin : chaine de caracteres
         Date de la fin de la periode, avec un format comme cet exemple : "2025-05-17 13:30:00"
-    comparaison : int
+    chemin_figures : Chaine de caracteres (optionnel)
+        Chemin vers le dossier ou les figures sont enregistrees en format png
+    comparaison : int (0 par default)
         Figure comparant la quantite de pluie observee et estimee
         0 : non ; 1 : oui
-    
+
     Returns
     -------
     None
     """
+    save_figures = chemin_figures is not None
+    if save_figures:
+        os.makedirs(chemin_figures, exist_ok=True)
+
     #Lire le dictionnaire des donnees calculees
     with open(data_calcul, "rb") as f:
         data = pickle.load(f)
-    #donnees = data[pd.Timestamp(date_heure)]
     date_debut = pd.Timestamp(date_debut)
     date_fin = pd.Timestamp(date_fin)
-    
+
     periode = [t for t in data.keys()
         if date_debut <= pd.Timestamp(t) <= date_fin]
     periode = sorted(periode)
-    
+
     #Grille radar - centroides xyz (500x500m)
     radar_grid = pd.read_csv(radar_grid)
     radar_grid = radar_grid.set_index('id')
@@ -750,100 +911,193 @@ def figures_periode(data_calcul, radar_grid, emplacements_pluvios, donnees_pluvi
     radar_grid = radar_grid.rename(columns={'ELEV_1': 'Z'})
     radar_grid = radar_grid.apply(pd.to_numeric)
     radar_grid[['X','Y','Z']] = np.floor(radar_grid[['X','Y','Z']]*10**6)/10**6
-    
+
     gx = np.array(radar_grid['X'])
     gy = np.array(radar_grid['Y'])
     coords_grille = np.column_stack((gx, gy))
-    
+
     #Emplacements des pluviometres
     pluvio_xyz = pd.read_csv(emplacements_pluvios)
     pluvio_xyz = pluvio_xyz.set_index('SONDEID')
     pluvio_xyz = pluvio_xyz[['X','Y','ELEV_1']]
     pluvio_xyz = pluvio_xyz.rename(columns={'ELEV_1': 'Z'})
-    pluvio_xyz = pluvio_xyz.apply(pd.to_numeric) 
+    pluvio_xyz = pluvio_xyz.apply(pd.to_numeric)
     pluvio_xyz[['X','Y','Z']] = np.floor(pluvio_xyz[['X','Y','Z']]*10**6)/10**6
-    
+
     xpluvio = np.array(pluvio_xyz['X'])
     ypluvio = np.array(pluvio_xyz['Y'])
     coords_stations = np.column_stack((xpluvio, ypluvio))
-    
+
     #Donnees des pluviometres
     donnees_pluvios = pd.read_csv(donnees_pluvios)
     donnees_pluvios = donnees_pluvios.set_index('Unnamed: 0')
     donnees_pluvios = donnees_pluvios.rename_axis('Temps')
     donnees_pluvios.index = pd.to_datetime(donnees_pluvios.index)
-    donnees_pluvios = donnees_pluvios.apply(pd.to_numeric) 
+    donnees_pluvios = donnees_pluvios.apply(pd.to_numeric)
     donnees_pluvios = donnees_pluvios[pluvio_xyz.index]
-    
+
+    #Echelle de couleur
+    colors = ["#addd8e","#31a354","#ffff38","#f74d50","#7b3294"]
+    cmap = LinearSegmentedColormap.from_list("green_purple", colors)
+
+    max_event = [] #Pour trouver le max de l'echelle de pluie
+    for t in periode:
+        vals = data[pd.Timestamp(t)]['estimation'].values
+        if np.any(np.isfinite(vals)):
+            max_event.append(np.nanmax(vals))
+    vmax_event = np.max(max_event)
+
     for date_heure in periode:
         print(f"Traitement : {date_heure}")
+        date_str = pd.Timestamp(date_heure).strftime("%Y%m%d_%H%M")
         donnees = data[pd.Timestamp(date_heure)]
 
         pivot = donnees.pivot(index='y',columns='x',values='estimation')
-        x, y = np.meshgrid(pivot.columns.values,pivot.index.values)
         precip_reshape = pivot.values
-        
+        x_vals = pivot.columns.values
+        y_vals = pivot.index.values
+        if not np.all(np.isfinite(x_vals)) or not np.all(np.isfinite(y_vals)):
+            raise ValueError(f"Axes invalides (NaN/Inf) à {date_heure}")
+        x, y = np.meshgrid(x_vals, y_vals)
+
+        masked_precip = np.ma.masked_where(precip_reshape < 0.1, precip_reshape)
+        norm = PowerNorm(gamma= 0.5, vmin=0.1, vmax=vmax_event)
+
         data_pluvio = donnees_pluvios.loc[pd.Timestamp(date_heure)]
         data_pluvio = data_pluvio.sort_index()
         data_pluvio = data_pluvio.rename('precip')
-    
+
         valeurs_pluvio = pluvio_xyz.copy()
-        valeurs_pluvio['precip'] = data_pluvio   
-    
-        #Bornes des figures
-        min_obs=min(valeurs_pluvio['precip'])
-        max_obs=max(valeurs_pluvio['precip'])
-        
-        min_grille= np.nanmin(precip_reshape)
-        max_grille= np.nanmax(precip_reshape)
-                
-        min_global=min([min_obs,min_grille])
-        max_global=max([max_obs,max_grille])
-        
-        norm = plt.Normalize(min_global, max_global)
-     
-        #FIGURE : Carte radar - krigeage avec derive externe                
+        valeurs_pluvio['precip'] = data_pluvio
+
+        if np.all(precip_reshape == 0):
+            print(f"Carte ignorée (aucune pluie) : {date_heure}")
+            continue
+
+        #FIGURE : Carte de precip - krigeage avec derive externe
         fig, ax = plt.subplots(figsize=(8,6))
-        plt.pcolormesh(x, y, precip_reshape, shading='auto', cmap='Blues', norm=norm)
-        plt.colorbar(label="Pluie (mm)")
-        plt.xlabel("Longitude (m)")
-        plt.ylabel("Latitude (m)")
-        plt.title(f"Krigeage avec dérive externe - {date_heure}")
-        
-        plt.scatter(valeurs_pluvio['X'], valeurs_pluvio['Y'], c=valeurs_pluvio['precip'].astype(float), 
-                    cmap='Blues', edgecolor='black',s=80, norm=norm)
-        
+        pcm = ax.pcolormesh(x, y, masked_precip, shading='auto', cmap=cmap, norm=norm, alpha=0.7)
+            #alpha (apres norm) c'est pour la transparence (0.7)
+        ax.set_xlabel("Longitude (m)")
+        ax.set_ylabel("Latitude (m)")
+        ax.set_title(f"Krigeage avec dérive externe - {date_heure}")
+
+        station_vals = valeurs_pluvio['precip'].astype(float).values
+        sm = cm.ScalarMappable(norm=norm, cmap=cmap)
+        station_couleurs = sm.to_rgba(station_vals)
+        station_couleurs[station_vals < 0.1] = (1, 1, 1, 1)
+
+        ax.scatter(valeurs_pluvio['X'], valeurs_pluvio['Y'],
+                    color=station_couleurs, edgecolor='black',s=80)
+        cbar = fig.colorbar(pcm, ax=ax)
+        cbar.set_label("Pluie (mm)")
+        plt.show(fig)
+
+        #Pour ajouter une basemap :
+        ctx.add_basemap(ax,crs="EPSG:32187",source=ctx.providers.OpenStreetMap.Mapnik)
+
+        #Pour ajouter l'ortho photo :
+        #ctx.add_basemap(ax,crs="EPSG:32187",source=ctx.providers.Esri.WorldImagery)
+
+        #Enregistrer les figures
+        if save_figures :
+            nom_fichier = f"carte_{date_str}.png"
+            fig.savefig(os.path.join(chemin_figures, nom_fichier), dpi=300)
+        plt.close(fig)
+
         #FIGURE : Comparaison observation vs calculs
+        dist = cdist(coords_stations, coords_grille) #Distance entre station et grille
+        idx = np.argmin(dist, axis=1) #Indice du point grille le plus proche
+
         if comparaison == 1 :
-            dist = cdist(coords_stations, coords_grille) #Distance entre station et grille
-            idx = np.argmin(dist, axis=1) #Indice du point grille le plus proche
-            
-            estim_result = donnees['estimation'].values #Valeurs interpolées aux stations
+            estim_result = donnees['estimation'].values
             estim_station = pd.Series(estim_result[idx], index=pluvio_xyz.index, name='estim')
-            
+
             df_comparaison = pd.concat([data_pluvio.rename('obs'), estim_station],axis=1)
             df_comparaison['diff'] = np.abs(df_comparaison['obs'] - df_comparaison['estim'])
-            
+
+            fig2, ax2 = plt.subplots(figsize=(10, 4))
             df_comparaison.plot(y=['obs', 'estim'], kind='bar', figsize=(10,4))
-            plt.title("Comparaison des données observées et estimées pour tous les pluviomètres")
-            plt.ylabel("Précipitation (mm)")
+            ax2.set_title("Comparaison des données observées et estimées")
+            ax2.set_ylabel("Précipitation (mm)")
             plt.tight_layout()
-            plt.show()
-            
-            #Les stations autour de la zone etudiee
-            liste_stations = ['SPQ', 'CJC', 'ASC', 'SPH', 'JMJ']
-            comparaison_cut = df_comparaison.loc[df_comparaison.index.intersection(liste_stations)]
-            comparaison_cut.plot(y=['obs', 'estim'], kind='bar', figsize=(10,4))
-            plt.title("Comparaison des données observées et estimées pour les pluviomètres autour de la zone étudiée")
-            plt.ylabel("Précipitation (mm)")
-            plt.tight_layout()
-            plt.show()
-        
+
+            if save_figures:
+                nom_fichier = f"comparaison_{date_str}.png"
+                fig2.savefig(os.path.join(chemin_figures, nom_fichier),dpi=300)
+            plt.close(fig2)
+
         elif comparaison == 0 :
-            plt.show()
+            pass
         else :
-            raise ValueError("Le paramètre 'comparaison' doit être 0 ou 1")
-    
+            raise ValueError("Le parametre 'comparaison' doit être 0 ou 1")
+
+    return
+
+
+def video_precip(chemin_figures, date_debut, date_fin, format_video, prefixe="carte_", fps=3):
+    """
+    Parameters
+    ----------
+    chemin_figures : Chaine de caracteres
+        Chemin vers le dossier ou les figures sont enregistrees
+    date_debut : chaine de caracteres
+        Date du debut de la periode, avec un format comme cet exemple : "2025-05-17 13:30:00"
+    date_fin : chaine de caracteres
+        Date de la fin de la periode, avec un format comme cet exemple : "2025-05-17 13:30:00"
+    prefixe : chaine de caracteres (Optionnel)
+        Par default le prefixe est "carte_"
+    fps : int (Optionnel)
+        Vitesse de defilement, par default c'est 3 frames per second
+    format_video : chaine de caractere
+        Les choix de format video sont : "gif" et "mp4"
+
+    Returns
+    -------
+    None
+    """
+    date_debut = pd.Timestamp(date_debut)
+    date_fin = pd.Timestamp(date_fin)
+
+    if format_video not in ["mp4", "gif"]:
+        raise ValueError("format_video doit être 'mp4' ou 'gif'")
+
+    nom_video = (f"video_"
+                 f"{date_debut.strftime('%Y%m%d_%H%M')}_"
+                 f"{date_fin.strftime('%Y%m%d_%H%M')}."
+                 f"{format_video}")
+
+    fichiers = []
+    for fichier in os.listdir(chemin_figures):
+        if not (fichier.startswith(prefixe) and fichier.endswith(".png")):
+            continue
+        try:
+            date_fichier = pd.to_datetime(fichier.replace(prefixe, "").replace(".png", ""),format="%Y%m%d_%H%M")
+        except Exception:
+            continue
+        if date_debut <= date_fichier <= date_fin:
+            fichiers.append((date_fichier, fichier))
+    fichiers.sort()
+
+    if len(fichiers) == 0:
+        raise ValueError("Aucune image trouvee dans la periode demandee")
+
+    chemin_video = os.path.join(chemin_figures, nom_video)
+
+    if format_video == "mp4" :
+        with imageio.get_writer(chemin_video, fps=fps, codec="libx264", macro_block_size=None) as writer:
+            for _, fichier in fichiers:
+                image = imageio.imread(os.path.join(chemin_figures, fichier))
+                writer.append_data(image)
+    else : #donc gif
+        images = []
+        for _, fichier in fichiers:
+            img = imageio.imread(os.path.join(chemin_figures, fichier))
+            images.append(img)
+        imageio.mimsave(chemin_video, images, fps=fps)
+
+    print(f"Video creee : {chemin_video}")
+
     return
 
 
