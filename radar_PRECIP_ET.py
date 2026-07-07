@@ -167,7 +167,7 @@ def figures_PRECIPET(fichier_coords, fichier_pkl, chemin_figures=None):
     
     #Grille fixe
     coords = pd.read_csv(fichier_coords)
-    #Reprojection pour passer des EPSG:4326 en degres vers EPSG:3857 en metres
+    #Reprojection pour passer de EPSG:4326 en degres vers EPSG:2144 en metres
     gdf = gpd.GeoDataFrame(coords, geometry=gpd.points_from_xy(coords["longitude"], coords["latitude"]),
                            crs="EPSG:4326").to_crs(epsg=2144) #MTM zone 7
     coords["x"] = gdf.geometry.x
