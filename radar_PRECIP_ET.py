@@ -7,19 +7,20 @@ Traiter les donnees radar d'Environnement et Changement climatique Canada
 - ajoute_extension : Ajouter l'extension ".txt" aux fichiers originaux
 - formater_PRECIPET : Rassembler les donnees dans un seul dictionnaire et convertir les intensites
     de precipitations (mm/h) en precipitations cumulees sur 6 minutes (mm)
+- reprojection_PRECIPET : Reprojection des coordonnes du produit PRECIP-ET vers EPSG:32187
 - figures_PRECIPET : Tracer les cartes du produit radar PRECIP-ET sur la ville de Sherbrooke
 
 @author: Justine Hamelin
 """
 import os
-import numpy as np
 from pathlib import Path
 import shutil
+import pickle
+import numpy as np
 import pandas as pd
 from matplotlib.colors import LinearSegmentedColormap, PowerNorm
 import matplotlib.pyplot as plt
 import contextily as ctx
-import pickle
 from pyproj import Transformer
 
 def ajoute_extension(dossier_source, dossier_destination=None):
@@ -153,7 +154,8 @@ def reprojection_PRECIPET(donnees_radar, fichier_coords, chemin_resultats):
     fichier_coords : Chaine de caracteres
         Chemin vers le fichier CSV contenant les coordonnes de la grille spatiale de la zone d'etude
     chemin_resultats : Chaine de caracteres
-        Chemin vers le fichier PKL ou le dictionnaire des donnees reprojectees est enregistre
+        Chemin vers le fichier PKL ou le dictionnaire des donnees reprojectees
+        (de EPSG: 4326 vers EPSG:32187) est enregistre
 
     Returns
     -------
@@ -206,8 +208,7 @@ def figures_PRECIPET(donnees_proj, chemin_figures=None):
         Chemin vers le dictionnaire PKL contenant les coordonnes (latitude et longitude),
         l'intensite (mm/h) et les precipitations cumulees sur 6 minutes (mm) du produit PRECIP-ET
     chemin_figures : Chaine de caracteres (optionnel)
-        Chemin vers le dossier ou les figures sont enregistrees en format PNG, dans l'heure locale
-        et dont les coordonnees sont reprojectees vers EPSG:32187 (NAD83 / MTM zone 7)
+        Chemin vers le dossier ou les figures sont enregistrees en format PNG dans l'heure locale
     """
     save_figures = chemin_figures is not None
     if save_figures:
