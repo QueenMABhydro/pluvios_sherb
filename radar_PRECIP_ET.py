@@ -142,24 +142,31 @@ def formater_PRECIPET(dossier, fichier_pkl=None, fichier_coord=None, resume=Fals
     return donnees, coords, resume_grilles
 
 
-def figures_PRECIPET(fichier_coords, fichier_pkl, chemin_figures=None):
+def reprojection_PRECIPET(donnees_radar, fichier_coords, chemin_resultats):
     """
     Parameters
     ----------
+    donnees_radar : Chaine de caracteres
+        Chemin vers le fichier PKL contenant un dictionnaire dont les cles correspondent aux pas de temps
+        Chaque valeur est un DataFrame contenant es coordonnees (latitude, longitude),
+        l'intensite de precipitation (mm/h) et la precipitation cumulee sur 6 minutes (mm)
     fichier_coords : Chaine de caracteres
         Chemin vers le fichier CSV contenant les coordonnes de la grille spatiale de la zone d'etude
-    fichier_pkl : Chaine de caracteres
-        Chemin vers le dictionnaire PKL contenant les coordonnes (latitude et longitude), l'intensite (mm/h)
-        et les precipitations cumulees sur 6 minutes (mm) du produit PRECIP-ET
-    chemin_figures : Chaine de caracteres (optionnel)
-        Chemin vers le dossier ou les figures sont enregistrees en format PNG, dans l'heure locale
-        et dont les coordonnees sont reprojectees vers EPSG:32187 (NAD83 / MTM zone 7)
-    """
-    save_figures = chemin_figures is not None
-    if save_figures:
-        os.makedirs(chemin_figures, exist_ok=True)
+    chemin_resultats : Chaine de caracteres
+        Chemin vers le fichier PKL ou le dictionnaire des donnees reprojectees est enregistre
 
-    with open(fichier_pkl, "rb") as f:
+    Returns
+    -------
+    donnees_proj : Dictionnaire
+        Dictionnaire contenant les coordonnees de la grille en latitude, longitude, 
+        x et y, ainsi qu'un sous-dictionnaire "dates" dont les cles correspondent 
+        aux pas de temps et les valeurs sont les matrices de precipitations
+    """
+    dossier = os.path.dirname(chemin_resultats)
+    if dossier:
+        os.makedirs(dossier, exist_ok=True)
+
+    with open(donnees_radar, "rb") as f:
         donnees = pickle.load(f)
 
     #Grille fixe
@@ -172,14 +179,55 @@ def figures_PRECIPET(fichier_coords, fichier_pkl, chemin_figures=None):
     transformer = Transformer.from_crs("EPSG:4326", "EPSG:32187", always_xy=True)
     x, y = transformer.transform(lon_grid, lat_grid)
 
+    #Dictionnaire
+    donnees_proj = {"longitude": lon_grid, "latitude": lat_grid, "x": x, "y": y, "dates": {}}
+
+    for date, df in donnees.items():
+
+        grille_precip = coords.merge(df[["latitude", "longitude", "precip"]],
+            on=["latitude", "longitude"], how="left")
+
+        pivot = grille_precip.pivot(index="latitude", columns="longitude", values="precip")
+        pivot = pivot.reindex(index=lat_unique, columns=lon_unique)
+
+        donnees_proj["dates"][date] = pivot.values
+
+    with open(chemin_resultats, "wb") as f:
+        pickle.dump(donnees_proj, f)
+
+    return donnees_proj
+
+
+def figures_PRECIPET(donnees_proj, chemin_figures=None):
+    """
+    Parameters
+    ----------
+    fichier_pkl : Chaine de caracteres
+        Chemin vers le dictionnaire PKL contenant les coordonnes (latitude et longitude),
+        l'intensite (mm/h) et les precipitations cumulees sur 6 minutes (mm) du produit PRECIP-ET
+    chemin_figures : Chaine de caracteres (optionnel)
+        Chemin vers le dossier ou les figures sont enregistrees en format PNG, dans l'heure locale
+        et dont les coordonnees sont reprojectees vers EPSG:32187 (NAD83 / MTM zone 7)
+    """
+    save_figures = chemin_figures is not None
+    if save_figures:
+        os.makedirs(chemin_figures, exist_ok=True)
+
+    with open(donnees_proj, "rb") as f:
+        donnees = pickle.load(f)
+
+    #Grille fixe
+    x = donnees["x"]
+    y = donnees["y"]
+
     #Constantes pour tracer les figures
     colors = ["#addd8e","#31a354","#ffff38","#f74d50","#7b3294"]
     cmap = LinearSegmentedColormap.from_list("green_purple", colors)
-    vmax = max(np.nanmax(d["precip"].values) for d in donnees.values())
+    vmax = max(np.nanmax(precip) for precip in donnees["dates"].values())
     norm = PowerNorm(gamma=0.5, vmin=0.1, vmax=vmax)
 
     #Pas de temps a garder pour comparer avec la resolution de 5 minutes
-    dates_filtrees = [d for d in sorted(donnees.keys())
+    dates_filtrees = [d for d in sorted(donnees["dates"])
                       if pd.to_datetime(d, format="%Y%m%d%H_%M").minute in [0, 30]]
 
     for date in dates_filtrees:
@@ -188,13 +236,7 @@ def figures_PRECIPET(fichier_coords, fichier_pkl, chemin_figures=None):
         date_local = date_utc.tz_convert("America/Montreal")
         print(f"Traitement : {date_local}")
 
-        df = coords.merge(donnees[date][["latitude", "longitude", "precip"]],
-                          on=["latitude", "longitude"], how="left")
-
-        pivot = df.pivot(index="latitude", columns="longitude", values="precip")
-        pivot = pivot.reindex(index=lat_unique, columns=lon_unique)
-
-        precip = pivot.values
+        precip = donnees["dates"][date]
 
         masked_precip = np.ma.masked_where(np.isnan(precip) | (precip < 0.1), precip)
 
@@ -222,3 +264,4 @@ def figures_PRECIPET(fichier_coords, fichier_pkl, chemin_figures=None):
 
         plt.show()
         plt.close(fig)
+        
