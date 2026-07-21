@@ -28,15 +28,15 @@ Ville de Sherbrooke.
 """
 import os
 from pathlib import Path
-import pandas as pd
-import numpy as np
-from pykrige import OrdinaryKriging
-import matplotlib.pyplot as plt
 import pickle
+import numpy as np
+import pandas as pd
 from scipy.spatial.distance import cdist
-from pykrige.uk import UniversalKriging
-from matplotlib.colors import LinearSegmentedColormap, PowerNorm
+from scipy.stats import linregress
+from pykrige import OrdinaryKriging, UniversalKriging
+import matplotlib.pyplot as plt
 import matplotlib.cm as cm
+from matplotlib.colors import LinearSegmentedColormap, PowerNorm
 import contextily as ctx
 import imageio.v2 as imageio
 
@@ -44,26 +44,23 @@ def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pasdetemps
     """
     Parameters
     ----------
-    fichier_o : chaine de caracteres
+    fichier_o : str
         Chemin vers le fichier .csv des donnees brutes des pluviometres
-        Telecharger sur le site de la ville de Sherbrooke: https://pluviometres.ville.sherbrooke.qc.ca/
-        *Le fichier provenant du site est .xls et doit etre converti en .csv prealablement
-    fichier_modif : chaine de caracteres
-        Chemin et nom du fichier de destination (AVEC les dates manquantes ajoutees) en format csv
-    date_debut : chaine de caracteres
-        Date de debut de la periode d'interet. Exemple : '2018-01-01'
-    date_fin : chaine de caracteres
-        Date de fin de la periode d'interet. Exemple : '2018-12-31'
-    pasdetemps : chaine de caracteres
-        Resolution temporelle des donnees
-        Valeurs supportees : "5min" et "1h"
+        (source : https://pluviometres.ville.sherbrooke.qc.ca/)
+    fichier_modif : str
+        Chemin du fichier CSV de sortie contenant la serie temporelle complete
+    date_debut : str
+        Date de debut de la periode d'interet au format 'YYYY-MM-DD'
+    date_fin : cstr
+        Date de fin de la periode d'interet au format 'YYYY-MM-DD'
+    pasdetemps : str
+        Resolution temporelle des donnees : "5min" ou "1h"
 
     Returns
     -------
-    donnees_pluvio_complet: pandas.DataFrame
-        Serie temporelle complete couvrant la periode demandee
-        Les pas de temps manquant sont ajoutes et remplis avec des NaN
-        Le DataFrame est enregiste en format .csv
+    donnees_pluvio_complet : pandas.DataFrame
+        Serie temporelle complete sur la periode demandee
+        Les dates manquantes sont ajoutees et leurs valeurs sont remplies avec NaN
     """
     df = pd.read_csv(fichier_o, sep=';')
 
@@ -79,7 +76,7 @@ def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pasdetemps
         df = df.drop(columns='Période')
 
     elif pasdetemps == "1h" :
-        df['Heure'] = (df['Période'].str.extract(r'(\d{1,2})h')[0].str.zfill(2) + ':00:00')
+        df['Heure'] = df['Période'].str.extract(r'(\d{1,2})h')[0].str.zfill(2) + ':00:00'
         df['Date'] = pd.to_datetime(df['Date'].dt.strftime('%Y-%m-%d') + ' ' + df['Heure'])
         df = df.set_index('Date')
         df = df.drop(columns=['Période', 'Heure'])
@@ -90,57 +87,58 @@ def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pasdetemps
 
     serie_index = pd.date_range(start= date_debut , end= date_fin, freq= pasdetemps)
 
-    donnees_pluvio_complet = pd.DataFrame(index =serie_index, columns=df.columns)
-    donnees_pluvio_complet.update(df)
+    donnees_pluvio_complet = df.reindex(serie_index)
 
+    donnees_pluvio_complet.index.name = "Date"
     donnees_pluvio_complet.to_csv(fichier_modif, sep=',')
 
     return donnees_pluvio_complet
 
 
-def single_raingauge_metadata(precip_complete, emplacements_pluvios, dossier_sortie, fichier_metadata):
+def single_raingauge_metadata(precip_complete, emplacements_pluvios, dossier_sortie):
     """
     Parameters
     ----------
-    precip_complete : chaine de caracteres
-        Chemin vers le fichier csv des precipitations completes de toutes les stations
-        (precip_complete.csv)
-    emplacements_pluvios : chaine de caracteres
-        Chemin vers le fichier .csv des coordonnees des emplacements des pluviometres
+    precip_complete : str
+        Chemin vers le fichier CSV contenant les series temporelles completes
+        de toutes les stations (precip_complete.csv)
+    emplacements_pluvios : str
+        Chemin vers le fichier CSV des coordonnees des pluviometres
         (pluvio_xyz.csv)
-    dossier_sortie : chaine de caracteres
-        Chemin et nom du dossier de destination des fichiers individuels
-    fichier_metadata : chaine de caracteres
-        Chemin et nom du fichier de destination (.csv)
+    dossier_sortie : str
+        Chemin du dossier ou seront enregistres les fichiers individuels
+        et le fichier de metadata
 
     Returns
     -------
     metadata_df : pandas.DataFrame
-        Tableau metadata contenant : station_id, latitude, longitude, start_datetime, end_datetime et path
+        Tableau des metadonnees : station_id, latitude, longitude, 
+        start_datetime, end_datetime et path
     """
-    # Donnees de precipitations
+    #Donnees de precipitations
     donnees_precip_complet = pd.read_csv(precip_complete,sep=';',index_col=0,parse_dates=True)
 
-    # Emplacement des pluviometres
+    #Emplacement des pluviometres
     pluvio_xy = pd.read_csv(emplacements_pluvios)
     pluvio_xy = pluvio_xy.set_index('SONDEID')
     pluvio_xy = pluvio_xy[['Latitude','Longitude']]
     pluvio_xy = pluvio_xy.apply(pd.to_numeric)
     pluvio_xy.index = pluvio_xy.index.astype(str)
 
-    # Creer le dossier de sortie
+    #Creer le dossier de sortie
     dossier_sortie = Path(dossier_sortie)
     dossier_sortie.mkdir(exist_ok=True)
-
+    
+    fichier_metadata = dossier_sortie / "precip_complete_metadata.csv"
     metadata_list = []
 
     for station in donnees_precip_complet.columns:
-        # Fichier individuel
+        #Fichier individuel
         df_station = donnees_precip_complet[[station]]
         chemin_fichier = dossier_sortie / f"precip_complete_{station}.csv"
         df_station.to_csv(chemin_fichier, sep=';')
 
-        # Metadata
+        #Metadata
         metadata_list.append({
             'station_id': station,
             'latitude': pluvio_xy.loc[str(station), 'Latitude'],
@@ -157,252 +155,95 @@ def single_raingauge_metadata(precip_complete, emplacements_pluvios, dossier_sor
     return metadata_df
 
 
-def interpolation_IDW_grid(radar_grid, emplacements_pluvios, donnees_pluvios, rayon, chemin_resultats):
+def krig_ordinaire_pluvio(grille_interp, emplacements_pluvios, donnees_pluvios, chemin_resultats):
     """
     Parameters
     ----------
-    radar_grid : chaine de caracteres
-        Chemin vers le fichier .csv des coordonnees des points de la grille radar 
-        (radar_grid_xyz.csv)
-    emplacements_pluvios : chaine de caracteres
-        Chemin vers le fichier .csv des coordonnees des emplacements des pluviometres 
-        (pluvio_xyz.csv)
-    donnees_pluvios : chaine de caracteres
-        Chemin vers le fichier .csv des donnees completes des precipitations 
-        (precip_complete.csv)
-    rayon : Int
-        Valeur du rayon d'influence en metre
-    chemin_resultats : chaine de caracteres
-        Chemin vers le dictionnaire de dataframe, soit "resultats" qui est retourne 
-        par la fonction. Enregirster sous le format .pkl
-
-    Returns
-    -------
-    donnees_pluvios : DataFrame
-        DataFrame des donnees des pluviometres : une rangee par pas de temps et 
-        une colonne par pluviometre
-    resultats : Dictionnaire
-        Dictionnaire contenant un Dataframe pour chaque pas de temps. 
-        Chaque DataFrame contient 3 colonnes : "X", "Y" et "precip".
-        Les precipitations sont les valeurs resultant de l'interpolation IDW
-    """
-    # Grille radar - centroides xyz (500x500m)
-    radar_grid = pd.read_csv(radar_grid)
-    radar_grid = radar_grid.set_index('id')
-    radar_grid = radar_grid[['X','Y','ELEV_1']]
-    radar_grid = radar_grid.rename(columns={'ELEV_1': 'Z'})
-    radar_grid = radar_grid.apply(pd.to_numeric)
-    radar_grid[['X','Y','Z']] = np.floor(radar_grid[['X','Y','Z']]*10**6)/10**6
-    
-    gx = np.array(radar_grid['X'])
-    gy = np.array(radar_grid['Y'])
-    
-    # Coordonnees xyz des pluviometres
-    pluvio_xyz = pd.read_csv(emplacements_pluvios)
-    pluvio_xyz = pluvio_xyz.set_index('SONDEID')
-    pluvio_xyz = pluvio_xyz[['X','Y','ELEV_1']]
-    pluvio_xyz = pluvio_xyz.rename(columns={'ELEV_1': 'Z'})
-    pluvio_xyz = pluvio_xyz.apply(pd.to_numeric) 
-    pluvio_xyz[['X','Y','Z']] = np.floor(pluvio_xyz[['X','Y','Z']]*10**6)/10**6
-    
-    xpluvio = np.array(pluvio_xyz['X'])
-    ypluvio = np.array(pluvio_xyz['Y'])
-    
-    # Donnees pluviometres
-    donnees_pluvios = pd.read_csv(donnees_pluvios)
-    donnees_pluvios = donnees_pluvios.set_index('Unnamed: 0')
-    donnees_pluvios = donnees_pluvios.rename_axis('Temps')
-    donnees_pluvios.index = pd.to_datetime(donnees_pluvios.index)
-    donnees_pluvios = donnees_pluvios.apply(pd.to_numeric) 
-    donnees_pluvios = donnees_pluvios[pluvio_xyz.index] #Changer l'ordre des colonnes
-    
-    #Rassembler les donnees des pluviometres aux pluviometres
-    temps = donnees_pluvios.index
-    df = pd.DataFrame(index=temps)
-    
-    for station in pluvio_xyz.index :
-        df[f'X_{station}'] = pluvio_xyz.loc[station, 'X']
-        df[f'Y_{station}'] = pluvio_xyz.loc[station, 'Y']
-        df[f'precip_{station}'] = donnees_pluvios[station]
-    
-    #interpolation
-    resultats = {}
-    for t in temps :
-        precip = donnees_pluvios.loc[t].to_numpy()        
-        interpol = inverse_distance_to_grid(xpluvio, ypluvio, precip, gx, gy, r=rayon, min_neighbors=3)        
-        df_t = pd.DataFrame({'X':gx, 'Y':gy, 'precip':interpol})       
-        resultats[t] = df_t
-    
-    #Save les resultats
-    with open(chemin_resultats, "wb") as f:
-        pickle.dump(resultats, f)
-
-    return donnees_pluvios, resultats
-
-
-def interpolation_IDW_points(radar_grid, emplacements_pluvios, donnees_pluvios, rayon, chemin_resultats):
-    """
-    Parameters
-    ----------
-    radar_grid : chaine de caracteres
-        Chemin vers le fichier .csv des coordonnees des points de la grille radar 
-        (radar_grid_xyz.csv)
-    emplacements_pluvios : chaine de caracteres
-        Chemin vers le fichier .csv des coordonnees des emplacements des pluviometres 
-        (pluvio_xyz.csv)
-    donnees_pluvios : chaine de caracteres
-        Chemin vers le fichier .csv des donnees completes des precipitations 
-        (precip_complete.csv)
-    rayon : Int
-        Valeur du rayon d'influence en metre
-    chemin_resultats : chaine de caracteres
-        Chemin vers le dictionnaire de dataframe, soit "resultats" qui est retourne 
-        par la fonction. Enregirster sous le format .pkl
-
-    Returns
-    -------
-    donnees_pluvios : DataFrame
-        DataFrame des donnees des pluviometres : une rangee par pas de temps et 
-        une colonne par pluviometre
-    resultats : Dictionnaire
-        Dictionnaire contenant un Dataframe pour chaque pas de temps. 
-        Chaque DataFrame contient 3 colonnes : "X", "Y" et "precip".
-        Les precipitations sont les valeurs resultant de l'interpolation IDW
-    """
-    # Grille radar - centroides xyz (500x500m)
-    radar_grid = pd.read_csv(radar_grid)
-    radar_grid = radar_grid.set_index('id')
-    radar_grid = radar_grid[['X','Y','ELEV_1']]
-    radar_grid = radar_grid.rename(columns={'ELEV_1': 'Z'})
-    radar_grid = radar_grid.apply(pd.to_numeric)
-    radar_grid[['X','Y','Z']] = np.floor(radar_grid[['X','Y','Z']]*10**6)/10**6
-    
-    xi = (radar_grid[['X', 'Y']].copy()).to_numpy()
-    
-    # Coordonnees xyz des pluviometres
-    pluvio_xyz = pd.read_csv(emplacements_pluvios)
-    pluvio_xyz = pluvio_xyz.set_index('SONDEID')
-    pluvio_xyz = pluvio_xyz[['X','Y','ELEV_1']]
-    pluvio_xyz = pluvio_xyz.rename(columns={'ELEV_1': 'Z'})
-    pluvio_xyz = pluvio_xyz.apply(pd.to_numeric) 
-    pluvio_xyz[['X','Y','Z']] = np.floor(pluvio_xyz[['X','Y','Z']]*10**6)/10**6
-    
-    points = (pluvio_xyz[['X', 'Y']].copy()).to_numpy()
-    
-    # Donnees pluviometres
-    donnees_pluvios = pd.read_csv(donnees_pluvios)
-    donnees_pluvios = donnees_pluvios.set_index('Unnamed: 0')
-    donnees_pluvios = donnees_pluvios.rename_axis('Temps')
-    donnees_pluvios.index = pd.to_datetime(donnees_pluvios.index)
-    donnees_pluvios = donnees_pluvios.apply(pd.to_numeric) 
-    donnees_pluvios = donnees_pluvios[pluvio_xyz.index]
-    
-    #interpolation
-    resultats = {}
-    for t in donnees_pluvios.index :
-        precip = donnees_pluvios.loc[t].to_numpy()   
-        interpol = inverse_distance_to_points(points, precip, xi, rayon)
-        
-        resultats[t] = pd.DataFrame({'X': xi[:, 0],
-        'Y': xi[:, 1], 'precip': interpol})
-
-    #Save les resultats
-    with open(chemin_resultats, "wb") as f:
-        pickle.dump(resultats, f)
-
-    return donnees_pluvios, resultats
-
-
-def krig_ordinaire_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios, chemin_resultats):
-    """
-    Parameters
-    ----------
-    radar_grid : Chaine de caracteres
-        Chemin vers le fichier .csv contenant les coordonnees des cellules ou les precip sont krigees.
-        C'est une grille 500 x 500 m (*radar_grid_xyz.csv)
-    emplacements_pluvios : Chaine de caracteres
-        Chemin vers le fichier .csv contenant les coordonnees 'x' et 'y', en metre, des pluviometres
+    grille_interp : str
+        Chemin vers le fichier CSV des coordonnees de la grille d'interpolation
+        (*radar_grid_xyz.csv)
+    emplacements_pluvios : str
+        Chemin vers le fichier CSV des coordonnees des pluviometres en metre
         (*pluvio_xyz.csv)
-    donnees_pluvios : Chaine de caracteres
-        Chemin vers le fichier .csv contenant les donnees de tous les pluviometres et pour tous
-        les pas de temps de la periode (*precip_complete.csv)
-    chemin_resultats : Chaine de caracteres
-        Chemin vers le dictionnaire de dataframe, soit "resultats" qui est retourne par la fonction
+    donnees_pluvios : str
+        Chemin vers le fichier CSV des precipitations de toutes les stations
+        (*precip_complete.csv)
+    chemin_resultats : str
+        Chemin du fichier PKL ou sera enregistre le dictionnaire de resultats
 
     Returns
     -------
-    resultats : Dictionary
-        Dictionnaire ou on retrouve un dataframe pour chaque pas de temps.
-        Chaque df a une colonne 'x', 'y' (representant chaque case dans la grille radar), 'estimation' et 'variance'
-        Pour selectionner 1 seule grille : exemple : resultats[pd.to_datetime("2025-05-17 13:30:00")]
+    resultats : Dictionnaire
+        Dictionnaire contenant un DataFrame par pas de temps.
+        Chaque df a contient les colonnes x, y, estimation et variance
     """
-    # Grille radar - centroides xyz (500x500m)
-    radar_grid = pd.read_csv(radar_grid)
-    radar_grid = radar_grid.set_index('id')
-    radar_grid = radar_grid[['X','Y','ELEV_1']]
-    radar_grid = radar_grid.rename(columns={'ELEV_1': 'Z'})
-    radar_grid = radar_grid.apply(pd.to_numeric)
-    radar_grid[['X','Y','Z']] = np.floor(radar_grid[['X','Y','Z']]*10**6)/10**6
+    #Grille d'interpolation - centroides xy (500x500m)
+    grille_interp = (pd.read_csv(grille_interp)
+                     .set_index("id")[["X", "Y"]].apply(pd.to_numeric))
+    grille_interp[['X','Y']] = np.floor(grille_interp[['X','Y']]*10**6)/10**6
 
-    gx = np.array(radar_grid['X'])
-    gy = np.array(radar_grid['Y'])
+    gx = np.array(grille_interp['X'])
+    gy = np.array(grille_interp['Y'])
 
-    # Coordonnees xyz des pluviometres
-    pluvio_xyz = pd.read_csv(emplacements_pluvios)
-    pluvio_xyz = pluvio_xyz.set_index('SONDEID')
-    pluvio_xyz = pluvio_xyz[['X','Y','ELEV_1']]
-    pluvio_xyz = pluvio_xyz.rename(columns={'ELEV_1': 'Z'})
-    pluvio_xyz = pluvio_xyz.apply(pd.to_numeric) 
-    pluvio_xyz[['X','Y','Z']] = np.floor(pluvio_xyz[['X','Y','Z']]*10**6)/10**6
+    #Coordonnees des pluviometres
+    pluvio_xy = (pd.read_csv(emplacements_pluvios)
+                 .set_index("SONDEID")[["X", "Y"]].apply(pd.to_numeric))
+    pluvio_xy[['X','Y']] = np.floor(pluvio_xy[['X','Y']]*10**6)/10**6
 
-    # Donnees pluviometres
-    donnees_pluvios = pd.read_csv(donnees_pluvios)
-    donnees_pluvios = donnees_pluvios.set_index('Unnamed: 0')
-    donnees_pluvios = donnees_pluvios.rename_axis('Temps')
-    donnees_pluvios.index = pd.to_datetime(donnees_pluvios.index)
-    donnees_pluvios = donnees_pluvios.apply(pd.to_numeric) 
+    #Donnees de precipitations
+    donnees_pluvios = pd.read_csv(donnees_pluvios, index_col=0, 
+                                  parse_dates=True).apply(pd.to_numeric)
+    donnees_pluvios.index.name = "Temps"
 
-    #Rassembler les donnees des pluviometres aux pluviometres
     stations = donnees_pluvios.columns.values
     temps = donnees_pluvios.index
-    df = pd.DataFrame(index=temps)
-
-    for station in pluvio_xyz.index :
-        df[f'X_{station}'] = pluvio_xyz.loc[station, 'X']
-        df[f'Y_{station}'] = pluvio_xyz.loc[station, 'Y']
-        df[f'precip_{station}'] = donnees_pluvios[station]
 
     #Krigeage
     resultats = {}
     for t in temps :
-        ligne = df.loc[t]       #Info des pluviometres pour 1 pas de temps
-
-        x_val = np.array([ligne[f"X_{st}"]     for st in stations])        #Coordonnees X des pluviometres
-        y_val = np.array([ligne[f"Y_{st}"]     for st in stations])        #Coordonnees Y des pluviometres
-        precip = np.array([ligne[f"precip_{st}"] for st in stations])      #Precip aux pluviometres
-
-        #DataFrame du pas de temps
+        precip = donnees_pluvios.loc[t, stations].values
+        
         result_t = pd.DataFrame({"x":gx, "y":gy, "estimation":np.nan, "variance":np.nan},
-                                index= radar_grid.index)
+                                index= grille_interp.index)
 
-        if len(precip) > 0 and not np.all(np.isnan(precip)):
-            krig = OrdinaryKriging(x_val,y_val,precip,variogram_model='spherical',
-                                   nlags=8, enable_plotting=False, verbose=False,
-                                   enable_statistics=False, coordinates_type='euclidean',
-                                   pseudo_inv=True, weight=False)
+        masque = ~np.isnan(precip)
+        
+        if np.sum(masque) == 0: #Aucune observation dispo
+            resultats[t] = result_t
+            continue
 
-            estim, var = krig.execute("points", gx, gy)
+        if np.all(precip[masque] == 0): #Toutes les stations 0 mm
+            result_t["estimation"] = 0.0
+            result_t["variance"] = 0.0
+            resultats[t] = result_t
+            continue
 
-            result_t["estimation"] = estim
-            result_t["variance"] = var
+        if np.sum(masque) < 3: #Pas assez de station pour krigeage
+            resultats[t] = result_t
+            continue
 
-        else : pass
+        x_val = pluvio_xy.loc[stations[masque], "X"].values
+        y_val = pluvio_xy.loc[stations[masque], "Y"].values
+
+        
+        ok = OrdinaryKriging(x_val,y_val,precip[masque],                  
+                variogram_model='spherical', nlags=5)
+
+        estim, var = ok.execute("points", gx, gy)
+
+        estim = np.asarray(estim)
+        estim = np.maximum(estim, 0.0) #Contrainte de poids
+        var = np.asarray(var)
+
+        #Resultats
+        result_t["estimation"] = estim
+        result_t["variance"] = var
         resultats[t] = result_t
 
     with open(chemin_resultats, "wb") as f:
         pickle.dump(resultats, f)
 
-    return resultats, donnees_pluvios
+    return resultats
 
 
 def krig_derive_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios, chemin_resultats):
