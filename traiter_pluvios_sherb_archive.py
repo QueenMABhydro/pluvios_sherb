@@ -5,6 +5,9 @@ Created on Tue May 12 14:43:00 2026
 Fonctions pour traiter les donnees brutes des pluviometres de la
 Ville de Sherbrooke - Vieille fonctions
 
+- "krig_ordinaire" : Effectuer un krigeage ordinaire
+- "krig_derive_altitude" : Effectuer un krigeage avec l'altitude comme derive externe
+
 - "interpolation_IDW_grid" : Effectuer une interpolation par pondération inverse
     de la distance (IDW) des données des pluviometres sur une grille couvrant la 
     region etudiee avec "metpy.interpolate.inverse_distance_to_grid"
@@ -26,12 +29,202 @@ Ville de Sherbrooke - Vieille fonctions
 
 @author: Justine Hamelin
 """
-import pandas as pd
-import numpy as np
-from pykrige import OrdinaryKriging
-import matplotlib.pyplot as plt
+import os
+from pathlib import Path
 import pickle
-from metpy.interpolate import inverse_distance_to_grid
+import numpy as np
+import pandas as pd
+from scipy.spatial.distance import cdist
+from scipy.stats import linregress
+from pykrige import OrdinaryKriging, UniversalKriging
+from scipy.spatial import cKDTree
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+from matplotlib.colors import LinearSegmentedColormap, PowerNorm
+import contextily as ctx
+
+def krig_ordinaire(grille_interp, emplacements_pluvios, donnees_pluvios, chemin_resultats):
+    """
+    Parameters
+    ----------
+    grille_interp : str
+        Chemin vers le fichier CSV des coordonnees de la grille d'interpolation
+        (*radar_grid_xyz.csv)
+    emplacements_pluvios : str
+        Chemin vers le fichier CSV des coordonnees des pluviometres en metre
+        (*pluvio_xyz.csv)
+    donnees_pluvios : str
+        Chemin vers le fichier CSV des precipitations de toutes les stations
+        (*precip_complete.csv)
+    chemin_resultats : str
+        Chemin du fichier PKL ou sera enregistre le dictionnaire de resultats
+
+    Returns
+    -------
+    resultats : Dictionnaire
+        Dictionnaire contenant un DataFrame par pas de temps.
+        Chaque df a contient les colonnes x, y, estimation et variance
+    """
+    #Grille d'interpolation (500x500m)
+    grille_interp = (pd.read_csv(grille_interp)
+                     .set_index("id")[["X", "Y"]].apply(pd.to_numeric))
+    grille_interp[['X','Y']] = np.floor(grille_interp[['X','Y']]*10**6)/10**6
+
+    gx = np.array(grille_interp['X'])
+    gy = np.array(grille_interp['Y'])
+
+    #Coordonnees des pluviometres
+    pluvio_xy = (pd.read_csv(emplacements_pluvios)
+                 .set_index("SONDEID")[["X", "Y"]].apply(pd.to_numeric))
+    pluvio_xy[['X','Y']] = np.floor(pluvio_xy[['X','Y']]*10**6)/10**6
+
+    #Donnees de precipitations
+    donnees_pluvios = pd.read_csv(donnees_pluvios, index_col=0, 
+                                  parse_dates=True).apply(pd.to_numeric)
+    donnees_pluvios.index.name = "Temps"
+
+    stations = donnees_pluvios.columns.values
+    temps = donnees_pluvios.index
+
+    #Krigeage
+    resultats = {}
+    for t in temps :
+        precip = donnees_pluvios.loc[t, stations].values
+        
+        result_t = pd.DataFrame({"x":gx, "y":gy, "estimation":np.nan, "variance":np.nan},
+                                index= grille_interp.index)
+
+        masque = ~np.isnan(precip)
+        
+        if np.sum(masque) == 0: #Aucune observation dispo
+            resultats[t] = result_t
+            continue
+
+        if np.all(precip[masque] == 0): #Toutes les stations 0 mm
+            result_t["estimation"] = 0.0
+            result_t["variance"] = 0.0
+            resultats[t] = result_t
+            continue
+
+        if np.sum(masque) < 3: #Pas assez de station pour krigeage
+            resultats[t] = result_t
+            continue
+
+        x_val = pluvio_xy.loc[stations[masque], "X"].values
+        y_val = pluvio_xy.loc[stations[masque], "Y"].values
+
+        
+        ok = OrdinaryKriging(x_val,y_val,precip[masque],                  
+                variogram_model='spherical', nlags=5)
+
+        estim, var = ok.execute("points", gx, gy)
+
+        estim = np.maximum(np.asarray(estim), 0.0) #Contrainte de poids
+        var = np.asarray(var)
+
+        #Resultats
+        result_t["estimation"] = estim
+        result_t["variance"] = var
+        resultats[t] = result_t
+
+    with open(chemin_resultats, "wb") as f:
+        pickle.dump(resultats, f)
+
+    return resultats
+
+
+def krig_derive_altitude(grille_interp, emplacements_pluvios, donnees_pluvios,
+                         chemin_resultats):
+    """
+    Parameters
+    ----------
+    grille_interp : str
+        Chemin vers le fichier CSV des coordonnees de la grille d'interpolation
+        (*radar_grid_xyz.csv)
+    emplacements_pluvios : str
+        Chemin vers le fichier CSV des coordonnees des pluviometres en metre
+        (*pluvio_xyz.csv)
+    donnees_pluvios : str
+        Chemin vers le fichier CSV des precipitations de toutes les stations
+        (*precip_complete.csv)
+    chemin_resultats : str
+        Chemin du fichier PKL ou sera enregistre le dictionnaire de resultats
+
+    Returns
+    -------
+    resultats : Dictionnaire
+        Dictionnaire contenant un DataFrame par pas de temps.
+        Chaque df a contient les colonnes x, y, estimation et variance
+    """
+    #Grille d'interpolation (500x500m)
+    grille_interp = (pd.read_csv(grille_interp).set_index("id")[["X", "Y", "ELEV_1"]]
+        .rename(columns={"ELEV_1": "Z"}).apply(pd.to_numeric))
+    grille_interp[['X','Y','Z']] = np.floor(grille_interp[['X','Y','Z']]*10**6)/10**6
+
+    gx = np.array(grille_interp['X'])
+    gy = np.array(grille_interp['Y'])
+    gz = np.array(grille_interp['Z'])
+
+    #Coordonnees des pluviometres
+    pluvio_xyz = (pd.read_csv(emplacements_pluvios).set_index("SONDEID")[["X", "Y", "ELEV_1"]]
+        .rename(columns={"ELEV_1": "Z"}).apply(pd.to_numeric))
+    pluvio_xyz[['X','Y','Z']] = np.floor(pluvio_xyz[['X','Y','Z']]*10**6)/10**6
+
+    #Donnees de precipitations
+    donnees_pluvios = pd.read_csv(donnees_pluvios, index_col=0, 
+                                  parse_dates=True).apply(pd.to_numeric)
+    donnees_pluvios.index.name = "Temps"
+
+    stations = donnees_pluvios.columns.values
+    temps = donnees_pluvios.index
+
+    #Krigeage
+    resultats = {}
+    for t in temps :
+        precip = donnees_pluvios.loc[t, stations].values
+        
+        result_t = pd.DataFrame({"x":gx, "y":gy, "z":gz, "estimation":np.nan, "variance":np.nan},
+                                index= grille_interp.index)
+        
+        masque = ~np.isnan(precip)
+
+        if np.sum(masque) == 0: #Aucune observation dispo
+            resultats[t] = result_t
+            continue
+
+        if np.all(precip[masque] == 0): #Toutes les stations 0 mm
+            result_t["estimation"] = 0.0
+            result_t["variance"] = 0.0
+            resultats[t] = result_t
+            continue
+
+        if np.sum(masque) < 3: #Pas assez de station pour krigeage
+            resultats[t] = result_t
+            continue
+
+        x_val = pluvio_xyz.loc[stations[masque], "X"].values
+        y_val = pluvio_xyz.loc[stations[masque], "Y"].values
+        z_val = pluvio_xyz.loc[stations[masque], "Z"].values
+
+        uk = UniversalKriging(x_val, y_val, precip[masque],
+            variogram_model='spherical', nlags=5,
+            drift_terms=['specified'], specified_drift = [z_val[masque]],
+            pseudo_inv=True)
+
+        estim, var = uk.execute("points", gx, gy, specified_drift_arrays=[gz])
+
+        estim = np.maximum(np.asarray(estim), 0.0) #Contrainte de poids
+        var = np.asarray(var)
+
+        #Resultats
+        result_t["estimation"] = estim
+        result_t["variance"] = var
+        resultats[t] = result_t
+
+    with open(chemin_resultats, "wb") as f:
+        pickle.dump(resultats, f)
+
+    return resultats
 
 
 def interpolation_IDW_grid(radar_grid, emplacements_pluvios, donnees_pluvios, rayon, chemin_resultats):
