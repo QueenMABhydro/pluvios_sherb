@@ -6,9 +6,13 @@ Created on Tue Nov 18 15:45:46 2025
 Fonctions pour traiter les donnees brutes des pluviometres de la
 Ville de Sherbrooke.
 - "ajoute_manquantes": Ajouter explicitement les donnees manquantes
-- "single_raingauge" : Creer un fichier des precipitations completes propre a chaque pluviometre
-- "metadata" : Creer le fichier metadata utiliser par le module rainfallQC
+- "single_raingauge_metadata" : Creer un fichier des precipitations completes
+    propre a chaque pluviometre ainsi que le fichier metadata utiliser par le module rainfallQC
 
+- "telecharger_gpm" : Telecharger des donnees de precipitation GPM IMERG demi-horaires
+    (GPM_3IMERGHH) depuis EarthData, puis decouper la grille selon la zone d'etude
+- "formater_gpm" : Reprojeter les coordonnees, ajuster le decalage horaire et 
+    selectionner les variables
 - "krig_pluvio" : Effectuer un krigeage ordinaire, un krigeage avec l'altitude comme
     derive ou un krigeage avec des donnees satellitaires comme derive
 
@@ -27,11 +31,16 @@ Ville de Sherbrooke.
 import os
 from pathlib import Path
 import pickle
+import earthaccess
+import xarray as xr
 import numpy as np
 import pandas as pd
+from datetime import datetime
 from scipy.spatial.distance import cdist
 from scipy.stats import linregress
+from pyproj import Transformer
 from pykrige import OrdinaryKriging, UniversalKriging
+from scipy.spatial import cKDTree
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from matplotlib.colors import LinearSegmentedColormap, PowerNorm
@@ -151,6 +160,167 @@ def single_raingauge_metadata(precip_complete, emplacements_pluvios, dossier_sor
     metadata_df.to_csv(fichier_metadata, sep=';', index=False)
 
     return metadata_df
+
+
+def telechargement_gpm(dossier_auth, dossier_download, date_debut, date_fin, bounding_box):
+    """
+    Parameters
+    ----------
+    dossier_auth : str
+        Chemin vers le dossier contenant les fichiers d'authentification EarthData
+        (.edl_token, .urs_cookies et .dodsrc) Le dossier est cree s'il n'existe pas
+    dossier_download : str
+        Chemin vers le dossier ou les fichiers HDF5 temporaires et le fichier NetCDF
+        final sont enregistres. Le dossier est cree s'il n'existe pas
+    date_debut : str
+        Date de debut de la periode d'interet au format 'YYYY-MM-DD'
+    date_fin : str
+        Date de fin de la periode d'interet au format 'YYYY-MM-DD'
+    bounding_box : Tuple
+        Limites spatiales de la zone d'etude :
+            (longitude_min, latitude_min, longitude_max, latitude_max)
+            #bounding_box = (-72.413, 45.022, -71.507, 45.697)
+
+    Returns
+    -------
+    fichier_nc : Chaine de caractere
+        Chemin complet vers le fichier NetCDF cree
+
+    Notes
+    ------
+    - Le produit utilise : GPM IMERG Half Hourly Final Run (GPM_3IMERGHH),
+    - Version 07
+    - Resolution temporelle : 30 minutes
+    """
+    dossier_auth = Path(dossier_auth).resolve()
+    dossier_auth.mkdir(parents=True, exist_ok=True)
+
+    dossier_download = Path(dossier_download).resolve()
+    dossier_download.mkdir(parents=True, exist_ok=True)
+
+    datedebut = datetime.strptime(date_debut, "%Y-%m-%d").strftime("%Y%m%d")
+    datefin = datetime.strptime(date_fin, "%Y-%m-%d").strftime("%Y%m%d")
+
+    #Verif si le fichier netCDF existe
+    fichier_nc = dossier_download / f"IMERG_{datedebut}_{datefin}.nc"
+
+    if fichier_nc.exists():
+        reponse = input (f"Le fichier existe deja : {fichier_nc}\n"
+                         "Voulez-vous l'ecraser? (Oui/Non) : ")
+        if reponse.lower() == "oui" :
+            print("L'ancien fichier est supprime")
+            os.remove(fichier_nc)
+        elif reponse.lower() == "non":
+            print("Telecharement annule")
+            return fichier_nc
+        else :
+            raise ValueError("Veuillez entrer Oui ou Non")
+
+    token_file_path = dossier_auth / ".edl_token"
+    urs_cookies_path = dossier_auth / ".urs_cookies"
+    dodsrc_path = dossier_auth / ".dodsrc"
+
+    #Authentification EarthData
+    earthaccess.login(strategy="interactive", persist=True)
+
+    token_info = earthaccess.get_edl_token()
+
+    if token_info is None:
+        raise RuntimeError("Impossible d'obtenir un jeton EarthData")
+
+    token_file_path.write_text(token_info["access_token"])
+    urs_cookies_path.touch()
+    dodsrc_path.write_text(
+        f"HTTP.COOKIEJAR={urs_cookies_path}\n"
+        f"HTTP.NETRC={Path.home() / '.netrc'}")
+
+    #Recherche des fichiers
+    results = earthaccess.search_data(
+        short_name="GPM_3IMERGHH",
+        version="07",
+        temporal=(date_debut, date_fin),
+        bounding_box=(bounding_box))
+
+    if len(results) == 0:
+        raise ValueError("Aucun fichier GPM trouve pour cette periode")
+    print(f"{len(results)} fichiers trouves")
+
+    #Telechargement HDF5
+    downloaded_files = earthaccess.download(results, local_path= dossier_download)
+
+    xr.set_options(use_new_combine_kwarg_defaults=True)
+    ds = xr.open_mfdataset(downloaded_files, group="Grid", combine="by_coords", data_vars="all")
+    print(ds.time)
+    #Decoupage spatial
+    lon_min, lat_min, lon_max, lat_max = bounding_box
+    ds = ds.sel(lon=slice(lon_min, lon_max), lat=slice(lat_min, lat_max))
+
+    #Sauvegarder un seul NetCDF
+    ds.to_netcdf(str(fichier_nc))
+    ds.close()
+
+    #Supprimer les fichiers HDF5 telecharges
+    for fichier in downloaded_files:
+        fichier = Path(fichier)
+        if fichier.suffix == ".HDF5" and fichier.exists():
+            fichier.unlink()
+
+    print(f"Fichier cree : {fichier_nc}")
+
+    return str(fichier_nc)
+
+
+def formater_gpm(fichier_nc, chemin_resultats):
+    """
+    Parameters
+    ----------
+    fichier_nc : str
+        Chemin vers le fichier NetCDF des donnees GPM
+    chemin_resultats : str
+        Chemin vers le fichier PKL de sortie
+
+    Returns
+    -------
+    donnees_proj : dictionnaire
+        Dictionnaire contenant les coordonnees geographiques et projetees,
+        ainsi qu'un dictionnaire de grilles de precipitation par pas de temps.
+    """
+    chemin_resultats = Path(chemin_resultats)
+    chemin_resultats.parent.mkdir(parents=True, exist_ok=True)
+
+    with xr.open_dataset(fichier_nc) as ds :
+        #Decalage horaire - UTC vers heure locale Montreal
+        temps = pd.to_datetime([t.strftime("%Y-%m-%d %H:%M:%S") for t in ds.time.values])
+        temps = (temps.tz_localize("UTC").tz_convert("America/Montreal").tz_localize(None))
+
+        #Coordonnees
+        lon = ds["lon"].values
+        lat = ds["lat"].values
+
+        #Variables
+        intensite = ds["precipitation"].transpose("time", "lat", "lon").values
+        quality_index = ds["precipitationQualityIndex"].transpose("time", "lat", "lon").values
+
+    #Conversion mm/h en mm - intervalle de 30 minutes
+    precip = intensite * 30/60
+
+    #Grille geographique
+    lon_grid, lat_grid = np.meshgrid(lon, lat)
+    transformer = Transformer.from_crs("EPSG:4326", "EPSG:32187", always_xy=True)
+    x, y = transformer.transform(lon_grid, lat_grid)
+
+    #Organiser les donnees
+    donnees_gpm = {"longitude": lon_grid, "latitude": lat_grid,
+                    "x": x, "y": y, "precip": {}, "quality_index": {}}
+
+    for i, date in enumerate(temps):
+        donnees_gpm["precip"][date] = precip[i, :, :]
+        donnees_gpm["quality_index"][date] = quality_index[i, :, :]
+
+    with open(chemin_resultats, "wb") as f:
+        pickle.dump(donnees_gpm, f)
+
+    return donnees_gpm
 
 
 def krig_pluvio(grille_interp, emplacements_pluvios, donnees_pluvios, 
