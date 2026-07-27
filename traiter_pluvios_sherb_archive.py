@@ -15,6 +15,7 @@ Ville de Sherbrooke - Vieille fonctions
     de la distance (IDW) des données des pluviometres sur une grille couvrant la 
     region etudiee avec "metpy.interpolate.inverse_distance_to_points"
 - "krig_derive_fixe_pluvio" : Effectuer un krigeage avec dérive externe et un variogramme FIXE
+- "krig_derive_gpm_pluvios" : Kriger avec gpm comme derive externe
 
 - "valid_krig" : Calcul de RMSE pour valider le krigeage
 
@@ -528,6 +529,142 @@ def krig_derive_fixe_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios, c
         pickle.dump(resultats, f)
 
     return resultats, donnees_pluvios
+
+
+def krig_derive_gpm_pluvio(radar_grid, emplacements_pluvios, donnees_pluvios, donnees_gpm,
+                           chemin_resultats):
+    """
+    Parameters
+    ----------
+    radar_grid : Chaine de caracteres
+        Chemin vers le fichier .csv contenant les coordonnees des cellules ou les precip sont krigees.
+        C'est une grille 500 x 500 m (*radar_grid_xyz.csv)
+    emplacements_pluvios : Chaine de caracteres
+        Chemin vers le fichier .csv contenant les coordonnees 'x' et 'y', en metre, des pluviometres
+        (*pluvio_xyz.csv)
+    donnees_pluvios : Chaine de caracteres
+        Chemin vers le fichier .csv contenant les donnees de tous les pluviometres et pour tous
+        les pas de temps de la periode (*precip_complete.csv)
+    donnees_gpm : Chaine de caracteres
+        Chemin vers le dictionnaire PKL contenant les donnees GPM reprojetees
+    chemin_resultats : Chaine de caracteres
+
+
+    Returns
+    -------
+    resultats : Dictionnaire
+        Dictionnaire ou on retrouve un dataframe pour chaque pas de temps.
+        Chaque df contient : x, y, estimation, variance
+    """
+    # Grille radar - centroides xyz (500x500m)
+    radar_grid = pd.read_csv(radar_grid)
+    radar_grid = radar_grid.set_index('id')
+    radar_grid = radar_grid[['X','Y','ELEV_1']]
+    radar_grid = radar_grid.rename(columns={'ELEV_1': 'Z'})
+    radar_grid = radar_grid.apply(pd.to_numeric)
+    radar_grid[['X','Y','Z']] = np.floor(radar_grid[['X','Y','Z']]*10**6)/10**6
+
+    gx = np.array(radar_grid['X'])
+    gy = np.array(radar_grid['Y'])
+
+    # Coordonnees xyz des pluviometres
+    pluvio_xyz = pd.read_csv(emplacements_pluvios)
+    pluvio_xyz = pluvio_xyz.set_index('SONDEID')
+    pluvio_xyz = pluvio_xyz[['X','Y','ELEV_1']]
+    pluvio_xyz = pluvio_xyz.rename(columns={'ELEV_1': 'Z'})
+    pluvio_xyz = pluvio_xyz.apply(pd.to_numeric)
+    pluvio_xyz[['X','Y','Z']] = np.floor(pluvio_xyz[['X','Y','Z']]*10**6)/10**6
+
+    # Donnees pluviometres
+    donnees_pluvios = pd.read_csv(donnees_pluvios)
+    donnees_pluvios = donnees_pluvios.set_index('Unnamed: 0')
+    donnees_pluvios = donnees_pluvios.rename_axis('Temps')
+    donnees_pluvios.index = pd.to_datetime(donnees_pluvios.index)
+    donnees_pluvios = donnees_pluvios.apply(pd.to_numeric)
+
+    donnees_pluvios = donnees_pluvios.resample("30min").sum()
+
+    #Donnees GPM
+    with open(donnees_gpm, "rb") as f:
+        donnees_gpm = pickle.load(f)
+
+    #Temps commun
+    temps_gpm = pd.DatetimeIndex(donnees_gpm["precip"].keys())
+    temps = donnees_pluvios.index.intersection(temps_gpm)
+
+    if len(temps) == 0:
+        raise ValueError("Aucun pas de temps commun entre les pluviometres et GPM")
+
+    #Stations
+    stations = donnees_pluvios.columns.values
+
+    #Grille GPM
+    gpm_xy = np.column_stack((donnees_gpm["x"].ravel(), donnees_gpm["y"].ravel()))
+    tree_gpm = cKDTree(gpm_xy)
+
+    #Associer GPM et stations
+    pluvio_xy = np.column_stack((
+        pluvio_xyz.loc[stations, "X"],
+        pluvio_xyz.loc[stations, "Y"]))
+    _, indices_gpm_pluvio = tree_gpm.query(pluvio_xy)
+
+    #Associer GPM et grille radar
+    radar_xy = np.column_stack((gx, gy))
+    _, indices_gpm_radar = tree_gpm.query(radar_xy)
+
+    resultats = {}
+
+    #Krigeage
+    for t in temps :
+        precip = donnees_pluvios.loc[t, stations].values
+
+        result_t = pd.DataFrame({"x": gx, "y": gy,
+            "estimation": np.nan, "variance": np.nan},
+            index=radar_grid.index)
+
+        masque = ~np.isnan(precip)
+
+        if np.sum(masque) == 0: #Aucune observation dispo
+            resultats[t] = result_t
+            continue
+
+        if np.all(precip[masque] == 0): #Toutes les stations 0 mm
+            result_t["estimation"] = 0.0
+            result_t["variance"] = 0.0
+            resultats[t] = result_t
+            continue
+
+        if np.sum(masque) < 3: #Pas assez de station pour krigeage
+            resultats[t] = result_t
+            continue
+
+        x_val = pluvio_xyz.loc[stations[masque], "X"].values
+        y_val = pluvio_xyz.loc[stations[masque], "Y"].values
+
+        gpm_station = (donnees_gpm["precip"][t].ravel()[indices_gpm_pluvio[masque]])
+        gpm_radar = (donnees_gpm["precip"][t].ravel()[indices_gpm_radar])
+
+        uk = UniversalKriging(x_val, y_val, precip[masque],
+            variogram_model='spherical', nlags=5,
+
+            drift_terms=['specified'],
+            specified_drift = [gpm_station])
+
+        estim, var = uk.execute("points", gx, gy, specified_drift_arrays=[gpm_radar])
+
+        estim = np.asarray(estim)
+        estim = np.maximum(estim, 0.0) #Contrainte de poids
+        var = np.asarray(var)
+
+        #Resultats
+        result_t["estimation"] = estim
+        result_t["variance"] = var
+        resultats[t] = result_t
+
+    with open(chemin_resultats, "wb") as f:
+        pickle.dump(resultats, f)
+
+    return resultats
 
 
 def valid_krig(data_krig, radar_grid, emplacements_pluvios, donnees_pluvios, date_debut, date_fin):
