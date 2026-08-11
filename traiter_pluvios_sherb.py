@@ -656,26 +656,28 @@ def tracer_variogrammes(emplacements_pluvios, donnees_pluvios, date_debut, date_
     return resultats
 
 
-def valid_krig_pluvios(data_krig, radar_grid, emplacements_pluvios, donnees_pluvios, date_debut, date_fin):
+def valid_krig_pluvios(data_krig, grille_interp, emplacements_pluvios, 
+                       donnees_pluvios, date_debut, date_fin):
     """
     Parameters
     ----------
-    data_krig : Chaine de caracteres
-        Chemin vers le fichier .pkl contenant les resultats du krigeage
-        Le dictionnaire doit etre structure par timestamps
-    radar_grid : Chaine de caracteres
-        Chemin vers le fichier .csv contenant la grille radar (coordonnees X, Y et altitude)
-        (*radar_grid_xyz.csv)
-    emplacements_pluvios : Chaine de caracteres
-        Chemin vers le fichier .csv contenant les coordonnees 'x' et 'y', en metre, des pluviometres
+    data_krig : str
+        Chemin vers le fichier PKL contenant les donnees krigees    
+        Dictionnaire avec un DataFrame par pas de temps.
+        Chaque df contient les colonnes x, y, estimation et variance
+    grille_interp : str
+        Chemin vers le fichier CSV des coordonnees de la grille d'interpolation
+        (*grille_interp.csv)
+    emplacements_pluvios : str
+        Chemin vers le fichier CSV des coordonnees des pluviometres en metre
         (*pluvio_xyz.csv)
-    donnees_pluvios : Chaine de caracteres
-        Chemin vers le fichier .csv contenant les observations de précipitations
-        aux pluviometres (*precip_complete.csv)
-    date_debut : chaine de caracteres
-        Date du debut de la periode, avec un format comme cet exemple : "2025-05-17 13:30:00"
-    date_fin : chaine de caracteres
-        Date de la fin de la periode, avec un format comme cet exemple : "2025-05-17 13:30:00"
+    donnees_pluvios : str
+        Chemin vers le fichier CSV des precipitations de toutes les stations
+        (*precip_complete.csv)
+    date_debut : str
+        Date de debut de la periode d'interet au format 'YYYY-MM-DD'
+    date_fin : str
+        Date de fin de la periode d'interet au format 'YYYY-MM-DD'
 
     Returns
     -------
@@ -684,18 +686,18 @@ def valid_krig_pluvios(data_krig, radar_grid, emplacements_pluvios, donnees_pluv
     rmse_glob_station : pandas.DataFrame
         RMSE calcule individuellemenet pour chaque station
     mae_global : float
-        MAE global sur l'ensemble des stations'
+        MAE global sur l'ensemble des stations
     mae_glob_station : pandas.DataFrame
         MAE calcule individuellemenet pour chaque station
     erreur_abs_serie : pandas.DataFrame
-        Serie temporelle des erreurs absolues par station (en mm)
+        Serie temporelle des erreurs absolues par station (mm)
     erreur_rel_serie : pandas.DataFrame
-        Serie temporelle des erreurs relatives (en %)
+        Serie temporelle des erreurs relatives (%)
     flags_serie_relatif : pandas.DataFrame
         Tableau de classification des erreurs relatives :
-            0 = bonne performance (≤ 20 %) ; 1 = erreur modérée (20–40 %)
-            2 = erreur élevée (40–60 %) ; 3 = très mauvaise performance (> 60 %)
-            4 = faible pluie (cas où l’interprétation relative est instable)
+            0 = bonne performance (≤ 20 %) ; 1 = erreur moderee (20–40 %)
+            2 = erreur elevee (40–60 %) ; 3 = très mauvaise performance (> 60 %)
+            4 = faible pluie (cas ou l’interpretation relative est instable)
     """
     #Lire le dictionnaire des donnees calculees
     with open(data_krig, "rb") as f:
@@ -704,50 +706,34 @@ def valid_krig_pluvios(data_krig, radar_grid, emplacements_pluvios, donnees_pluv
     #Periode
     date_debut = pd.Timestamp(date_debut)
     date_fin = pd.Timestamp(date_fin)
-    periode = [t for t in data.keys()
-        if date_debut <= pd.Timestamp(t) <= date_fin]
-    periode = sorted(periode)
+    periode = sorted(t for t in data
+                     if date_debut <= pd.Timestamp(t) <= date_fin)
 
-    #Grille radar - centroides xyz (500x500m)
-    radar_grid = pd.read_csv(radar_grid)
-    radar_grid = radar_grid.set_index('id')
-    radar_grid = radar_grid[['X','Y','ELEV_1']]
-    radar_grid = radar_grid.rename(columns={'ELEV_1': 'Z'})
-    radar_grid = radar_grid.apply(pd.to_numeric)
-    radar_grid[['X','Y','Z']] = np.floor(radar_grid[['X','Y','Z']]*10**6)/10**6
+    #Grille d'interpolation (500 x 500 m)
+    grille_interp = (pd.read_csv(grille_interp).set_index("id")[["X", "Y", "ELEV_1"]]
+        .rename(columns={"ELEV_1": "Z"}).apply(pd.to_numeric))
+    grille_interp[['X','Y','Z']] = np.floor(grille_interp[['X','Y','Z']]*10**6)/10**6
 
-    gx = np.array(radar_grid['X'])
-    gy = np.array(radar_grid['Y'])
-    coords_grille = np.column_stack((gx, gy))
+    coords_grille = grille_interp[["X", "Y"]].values
 
-    #Emplacements des pluviometres
-    pluvio_xyz = pd.read_csv(emplacements_pluvios)
-    pluvio_xyz = pluvio_xyz.set_index('SONDEID')
-    pluvio_xyz = pluvio_xyz[['X','Y','ELEV_1']]
-    pluvio_xyz = pluvio_xyz.rename(columns={'ELEV_1': 'Z'})
-    pluvio_xyz = pluvio_xyz.apply(pd.to_numeric)
+    #Coordonnees des pluviometres
+    pluvio_xyz = (pd.read_csv(emplacements_pluvios).set_index("SONDEID")[["X", "Y", "ELEV_1"]]
+        .rename(columns={"ELEV_1": "Z"}).apply(pd.to_numeric))
     pluvio_xyz[['X','Y','Z']] = np.floor(pluvio_xyz[['X','Y','Z']]*10**6)/10**6
 
-    xpluvio = np.array(pluvio_xyz['X'])
-    ypluvio = np.array(pluvio_xyz['Y'])
-    coords_stations = np.column_stack((xpluvio, ypluvio))
+    coords_stations = pluvio_xyz[["X", "Y"]].values
 
-    #Donnees des pluviometres
-    donnees_pluvios = pd.read_csv(donnees_pluvios)
-    donnees_pluvios = donnees_pluvios.set_index('Unnamed: 0')
-    donnees_pluvios = donnees_pluvios.rename_axis('Temps')
-    donnees_pluvios.index = pd.to_datetime(donnees_pluvios.index)
-    donnees_pluvios = donnees_pluvios.apply(pd.to_numeric)
-    donnees_pluvios = donnees_pluvios[pluvio_xyz.index]
+    #Donnees de precipitations
+    donnees_pluvios = pd.read_csv(donnees_pluvios, index_col=0,
+                                  parse_dates=True).apply(pd.to_numeric)
+    donnees_pluvios.index.name = "Temps"
 
     #Distances
     dist = cdist(coords_stations, coords_grille)
     idx = np.argmin(dist, axis=1)
 
     #Dictionnaire
-    erreurs_stations = {station: []
-        for station in pluvio_xyz.index}
-
+    erreurs_stations = {station: [] for station in pluvio_xyz.index}
     erreur_abs_serie = []
     erreur_rel_serie = []
     flags_serie_relatif = []
@@ -772,85 +758,82 @@ def valid_krig_pluvios(data_krig, radar_grid, emplacements_pluvios, donnees_pluv
             obs = obs_station[i]
             estim = estim_station[i]
 
-            if not np.isnan(obs) and not np.isnan(estim):
-                erreur = obs - estim
-                erreurs_stations[station].append(erreur)
-                erreurs_glob.append(erreur)
-
-                #Erreur absolue (mm)
-                erreur_abs_inst = np.abs(erreur)
-                ligne_temps[station] = erreur_abs_inst
-
-                #Erreur relative (%)
-                if obs > 0:
-                    erreur_rel_inst = np.abs(erreur) / obs * 100
-                else:
-                    erreur_rel_inst = np.nan
-
-                ligne_temps_rel[station] = erreur_rel_inst
-
-                #Flags erreur relative
-                if np.isnan(obs) or np.isnan(estim):
-                    flag = np.nan
-                elif obs == 0 :
-                    flag = np.nan
-                elif obs < 0.2: #Faible pluie
-                    flag = 4
-                elif np.isnan(erreur_rel_inst):
-                    flag = np.nan
-                elif erreur_rel_inst <= 20:
-                    flag = 0
-                elif erreur_rel_inst <= 40:
-                    flag = 1
-                elif erreur_rel_inst <= 60:
-                    flag = 2
-                else:
-                    flag = 3
-
-                ligne_temps_flag[station] = flag
-
-            else:
+            if np.isnan(obs) or np.isnan(estim):
                 ligne_temps[station] = np.nan
                 ligne_temps_rel[station] = np.nan
                 ligne_temps_flag[station] = np.nan
+                continue
+
+            erreur = obs - estim
+            erreurs_stations[station].append(erreur)
+            erreurs_glob.append(erreur)
+
+            #Erreur absolue (mm)
+            erreur_abs_inst = np.abs(erreur)
+            ligne_temps[station] = erreur_abs_inst
+
+            #Erreur relative (%)
+            if obs > 0:
+                erreur_rel_inst = np.abs(erreur) / obs * 100
+            else:
+                erreur_rel_inst = np.nan
+
+            ligne_temps_rel[station] = erreur_rel_inst
+
+            #Flags erreur relative
+            if obs == 0 :
+                flag = np.nan
+            elif obs < 0.2: #Faible pluie
+                flag = 4
+            elif np.isnan(erreur_rel_inst):
+                flag = np.nan
+            elif erreur_rel_inst <= 20:
+                flag = 0
+            elif erreur_rel_inst <= 40:
+                flag = 1
+            elif erreur_rel_inst <= 60:
+                flag = 2
+            else:
+                flag = 3
+
+            ligne_temps_flag[station] = flag
 
         erreur_abs_serie.append(ligne_temps)
         erreur_rel_serie.append(ligne_temps_rel)
         flags_serie_relatif.append(ligne_temps_flag)
 
-    # RMSE et MAE
+    #RMSE et MAE par station
     rmse_glob_station = {}
     mae_glob_station = {}
 
     for station, erreurs in erreurs_stations.items():
-        erreurs = np.array(erreurs)
-
-        if len(erreurs) == 0:
-            rmse_glob_station[station] = np.nan
-            mae_glob_station[station] = np.nan
-        else:
+        if erreurs:
+            erreurs = np.array(erreurs)
             rmse_glob_station[station] = np.sqrt(np.mean(erreurs**2))
             mae_glob_station[station] = np.mean(np.abs(erreurs))
+        else:
+            rmse_glob_station[station] = np.nan
+            mae_glob_station[station] = np.nan
 
     rmse_glob_station = pd.DataFrame([rmse_glob_station])
     mae_glob_station = pd.DataFrame([mae_glob_station])
 
+    #RMSE et MAE global
     erreurs_globales = np.array(erreurs_glob)
 
-    rmse_global = np.sqrt(np.mean(erreurs_globales**2)) if len(erreurs_globales) > 0 else np.nan
-    mae_global = np.mean(np.abs(erreurs_globales)) if len(erreurs_globales) > 0 else np.nan
+    if len(erreurs_globales) > 0:
+        rmse_global = np.sqrt(np.mean(erreurs_globales**2))
+        mae_global = np.mean(np.abs(erreurs_globales))
+    else:
+        rmse_global = np.nan
+        mae_global = np.nan
 
     #Mettre en DataFrame
-    erreur_abs_serie = pd.DataFrame(erreur_abs_serie)
-    erreur_abs_serie = erreur_abs_serie.set_index('Temps')
+    erreur_abs_serie = pd.DataFrame(erreur_abs_serie).set_index("Temps")
+    erreur_rel_serie = pd.DataFrame(erreur_rel_serie).set_index("Temps")
+    flags_serie_relatif = pd.DataFrame(flags_serie_relatif).set_index("Temps")
 
-    erreur_rel_serie = pd.DataFrame(erreur_rel_serie)
-    erreur_rel_serie = erreur_rel_serie.set_index('Temps')
-
-    flags_serie_relatif = pd.DataFrame(flags_serie_relatif)
-    flags_serie_relatif = flags_serie_relatif.set_index('Temps')
-
-    # FIGURE - boxplot
+    #FIGURE - boxplot
     plt.figure(figsize=(14,6))
     erreur_abs_serie.boxplot()
     plt.ylabel('Erreur absolue (mm)')
@@ -864,28 +847,131 @@ def valid_krig_pluvios(data_krig, radar_grid, emplacements_pluvios, donnees_pluv
     erreur_rel_serie, flags_serie_relatif)
 
 
-def figures_periode(data_calcul, radar_grid, emplacements_pluvios, donnees_pluvios, date_debut, date_fin,
-                    chemin_figures=None, comparaison=0):
+def valid_altitude(emplacements_pluvios, donnees_pluvios, date_debut, date_fin):
     """
     Parameters
     ----------
-    data_calcul : Chaine de caracteres
-        Chemin vers le fichier .pkl contenant le dictionnaire des resultats des calculs
-        (interpolation IDW ou krigeage ordinaire)
-    radar_grid : Chaine de caracteres
-        Chemin vers le fichier .csv contenant les coordonnees des cellules ou les precip sont krigees.
-        C'est une grille 500 x 500 m (*radar_grid_xyz.csv)
-    emplacements_pluvios : Chaine de caracteres
-        Chemin vers le fichier .csv contenant les coordonnees 'x' et 'y', en metre, des pluviometres
+    emplacements_pluvios : str
+        Chemin vers le fichier CSV des coordonnees des pluviometres en metre
         (*pluvio_xyz.csv)
-    donnees_pluvios : Chaine de caracteres
-        Chemin vers le fichier .csv contenant les donnees de tous les pluviometres et pour tous
-        les pas de temps de la periode (*precip_complete.csv)
-    date_debut : chaine de caracteres
-        Date du debut de la periode, avec un format comme cet exemple : "2025-05-17 13:30:00"
-    date_fin : chaine de caracteres
-        Date de la fin de la periode, avec un format comme cet exemple : "2025-05-17 13:30:00"
-    chemin_figures : Chaine de caracteres (optionnel)
+    donnees_pluvios : str
+        Chemin vers le fichier CSV des precipitations de toutes les stations
+        (*precip_complete.csv)
+    date_debut : str
+        Date de debut de la periode d'interet au format 'YYYY-MM-DD'
+    date_fin : str
+        Date de fin de la periode d'interet au format 'YYYY-MM-DD'
+
+    Returns
+    -------
+    resume : dict
+        Resume statistique de la relation pluie-altitude
+    resultats : pandas.DataFrame
+        Resultat de la regression lineaire pour chaque pas de temps
+    """
+    #Coordonnees des pluviometres
+    pluvio_xyz = (pd.read_csv(emplacements_pluvios).set_index("SONDEID")[["X", "Y", "ELEV_1"]]
+        .rename(columns={"ELEV_1": "Z"}).apply(pd.to_numeric))
+    pluvio_xyz[['X','Y','Z']] = np.floor(pluvio_xyz[['X','Y','Z']]*10**6)/10**6
+
+    #Donnees de precipitations
+    donnees_pluvios = pd.read_csv(donnees_pluvios, index_col=0,
+                                  parse_dates=True).apply(pd.to_numeric)
+    donnees_pluvios.index.name = "Temps"
+
+    #Periode
+    date_debut = pd.Timestamp(date_debut)
+    date_fin = pd.Timestamp(date_fin)
+    periode = donnees_pluvios.loc[date_debut:date_fin].index
+
+    resultats = []
+
+    for t in periode:
+        obs = donnees_pluvios.loc[t]
+
+        masque = obs.notna() #Garde les stations avec des observations
+        pluie = obs[masque].values
+        altitude = pluvio_xyz.loc[masque, 'Z'].values
+
+        if len(pluie) >= 3: #minimum 3 stations pour effectuer une regression
+            regression = linregress(altitude, pluie)
+
+            resultats.append({
+                'Temps': t,
+                'Nb_stations': len(pluie),
+                'Pente': regression.slope,
+                'Intercept': regression.intercept,
+                'R': regression.rvalue,
+                'R2': regression.rvalue**2,
+                'P_value': regression.pvalue,
+                'Erreur_type': regression.stderr})
+        else:
+            resultats.append({
+                'Temps': t,
+                'Nb_stations': len(pluie),
+                'Pente': np.nan,
+                'Intercept': np.nan,
+                'R': np.nan,
+                'R2': np.nan,
+                'P_value': np.nan,
+                'Erreur_type': np.nan})
+
+    resultats = pd.DataFrame(resultats)
+    resultats = resultats.set_index('Temps')
+
+    resume = {
+        'R2_moyen': resultats['R2'].mean(),
+        'R2_median': resultats['R2'].median(),
+        'R_moyen': resultats['R'].mean(),
+        'P_value_moyenne': resultats['P_value'].mean(),
+        'Pourcentage_R2_sup_05': (resultats['R2'] >= 0.5).mean() * 100,
+        'Pourcentage_significatif': (resultats['P_value'] < 0.05).mean() * 100}
+
+    #Figure : Evolution du R²
+    plt.figure(figsize=(12,5))
+    plt.plot(resultats.index, resultats['R2'])
+    plt.ylabel('R²')
+    plt.xlabel('Temps')
+    plt.title("Évolution temporelle de la corrélation pluie-altitude")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+    #Figure : Distribution des R²
+    plt.figure(figsize=(6,4))
+    plt.hist(resultats['R2'].dropna(), bins=15)
+    plt.xlabel('R²')
+    plt.ylabel('Nombre de pas de temps')
+    plt.title('Distribution des R²')
+    plt.tight_layout()
+    plt.show()
+
+    return resume, resultats
+
+
+def figures_periode(data_krig, grille_interp, emplacements_pluvios, donnees_pluvios, 
+                    date_debut, date_fin, chemin_figures=None, comparaison=0):
+    """
+    Parameters
+    ----------
+    data_krig : str
+        Chemin vers le fichier PKL contenant les donnees krigees    
+        Dictionnaire avec un DataFrame par pas de temps.
+        Chaque df contient les colonnes x, y, estimation et variance
+    grille_interp : str
+        Chemin vers le fichier CSV des coordonnees de la grille d'interpolation
+        (*grille_interp.csv)
+    emplacements_pluvios : str
+        Chemin vers le fichier CSV des coordonnees des pluviometres en metre
+        (*pluvio_xyz.csv)
+    donnees_pluvios : str
+        Chemin vers le fichier CSV des precipitations de toutes les stations
+        (*precip_complete.csv)
+    date_debut : str
+        Date de debut de la periode d'interet au format 'YYYY-MM-DD'
+    date_fin : str
+        Date de fin de la periode d'interet au format 'YYYY-MM-DD'
+    chemin_figures : str (optionnel)
         Chemin vers le dossier ou les figures sont enregistrees en format png
     comparaison : int (0 par default)
         Figure comparant la quantite de pluie observee et estimee
@@ -895,67 +981,76 @@ def figures_periode(data_calcul, radar_grid, emplacements_pluvios, donnees_pluvi
     -------
     None
     """
-    save_figures = chemin_figures is not None
-    if save_figures:
-        os.makedirs(chemin_figures, exist_ok=True)
+    chemin_figures = Path(chemin_figures) if chemin_figures is not None else None
+    if chemin_figures is not None:
+        chemin_figures.mkdir(parents=True, exist_ok=True)
 
     #Lire le dictionnaire des donnees calculees
-    with open(data_calcul, "rb") as f:
+    with open(data_krig, "rb") as f:
         data = pickle.load(f)
     date_debut = pd.Timestamp(date_debut)
     date_fin = pd.Timestamp(date_fin)
 
-    periode = [t for t in data.keys()
-        if date_debut <= pd.Timestamp(t) <= date_fin]
-    periode = sorted(periode)
+    periode = [pd.Timestamp(t) for t in data.keys()
+           if date_debut <= pd.Timestamp(t) <= date_fin]
+    periode.sort()
 
-    #Grille radar - centroides xyz (500x500m)
-    radar_grid = pd.read_csv(radar_grid)
-    radar_grid = radar_grid.set_index('id')
-    radar_grid = radar_grid[['X','Y','ELEV_1']]
-    radar_grid = radar_grid.rename(columns={'ELEV_1': 'Z'})
-    radar_grid = radar_grid.apply(pd.to_numeric)
-    radar_grid[['X','Y','Z']] = np.floor(radar_grid[['X','Y','Z']]*10**6)/10**6
+    #Grille d'interpolation (500 x 500 m)
+    grille_interp = (pd.read_csv(grille_interp).set_index("id")[["X", "Y", "ELEV_1"]]
+        .rename(columns={"ELEV_1": "Z"}).apply(pd.to_numeric))
+    grille_interp[['X','Y','Z']] = np.floor(grille_interp[['X','Y','Z']]*10**6)/10**6
 
-    gx = np.array(radar_grid['X'])
-    gy = np.array(radar_grid['Y'])
-    coords_grille = np.column_stack((gx, gy))
+    coords_grille = grille_interp[["X", "Y"]].values
 
     #Emplacements des pluviometres
-    pluvio_xyz = pd.read_csv(emplacements_pluvios)
-    pluvio_xyz = pluvio_xyz.set_index('SONDEID')
-    pluvio_xyz = pluvio_xyz[['X','Y','ELEV_1']]
-    pluvio_xyz = pluvio_xyz.rename(columns={'ELEV_1': 'Z'})
-    pluvio_xyz = pluvio_xyz.apply(pd.to_numeric)
-    pluvio_xyz[['X','Y','Z']] = np.floor(pluvio_xyz[['X','Y','Z']]*10**6)/10**6
+    pluvio_xyz = pd.read_csv(emplacements_pluvios, sep=",")
+    pluvio_xyz = pluvio_xyz.set_index('Code')
+    colonnes = ["X", "Y", "Z", "X_0", "Y_0", "Z_0"]
+    pluvio_xyz[colonnes] = pluvio_xyz[colonnes].apply(pd.to_numeric)
+    pluvio_xyz[colonnes] = np.floor(pluvio_xyz[colonnes] * 1e6) / 1e6
 
-    xpluvio = np.array(pluvio_xyz['X'])
-    ypluvio = np.array(pluvio_xyz['Y'])
+    dates_changement = {
+    "DEA": pd.Timestamp("2020-05-22"),
+    "LEN": pd.Timestamp("2022-07-20"),
+    "SPH": pd.Timestamp("2023-02-01"),
+    "SPQ": pd.Timestamp("2023-03-22")}
+
+    for station, date in dates_changement.items():
+        if station in pluvio_xyz.index and date_debut < date:
+            pluvio_xyz.loc[station, ["X", "Y"]] = \
+                pluvio_xyz.loc[station, ["X_0", "Y_0"]].values
+
+    pluvio_xyz = pluvio_xyz[["X", "Y"]]
+    xpluvio = pluvio_xyz["X"].to_numpy()
+    ypluvio = pluvio_xyz["Y"].to_numpy()
     coords_stations = np.column_stack((xpluvio, ypluvio))
 
-    #Donnees des pluviometres
-    donnees_pluvios = pd.read_csv(donnees_pluvios)
-    donnees_pluvios = donnees_pluvios.set_index('Unnamed: 0')
-    donnees_pluvios = donnees_pluvios.rename_axis('Temps')
-    donnees_pluvios.index = pd.to_datetime(donnees_pluvios.index)
-    donnees_pluvios = donnees_pluvios.apply(pd.to_numeric)
-    donnees_pluvios = donnees_pluvios[pluvio_xyz.index]
+    #Distance entre les stations et les cellules de la grille
+    dist = cdist(coords_stations, coords_grille)
+    idx = np.argmin(dist, axis=1)
+
+    #Donnees de precipitations
+    donnees_pluvios = pd.read_csv(donnees_pluvios, index_col=0,
+                                  parse_dates=True).apply(pd.to_numeric)
+    donnees_pluvios.index.name = "Temps"
 
     #Echelle de couleur
     colors = ["#addd8e","#31a354","#ffff38","#f74d50","#7b3294"]
     cmap = LinearSegmentedColormap.from_list("green_purple", colors)
 
-    max_event = [] #Pour trouver le max de l'echelle de pluie
-    for t in periode:
-        vals = data[pd.Timestamp(t)]['estimation'].values
-        if np.any(np.isfinite(vals)):
-            max_event.append(np.nanmax(vals))
-    vmax_event = np.max(max_event)
+    vmax_event = max(np.nanmax(data[t]['estimation'].values)
+                     for t in periode
+                     if np.any(np.isfinite(data[t]['estimation'].values)))
+
+    #Shapefile des bassins versants
+    #Ajuster les chemins avant d'utiliser la fonction
+    #contour_nick = gpd.read_file("chemin vers shapefile bassin nick/Bassin_final_modif.shp")
+    #contour_wilson = gpd.read_file("chemin vers shapefile bassin wilson/Bassin_Ruisseau_Wilson.SHP")
 
     for date_heure in periode:
         print(f"Traitement : {date_heure}")
-        date_str = pd.Timestamp(date_heure).strftime("%Y%m%d_%H%M")
-        donnees = data[pd.Timestamp(date_heure)]
+        date_str = date_heure.strftime("%Y%m%d_%H%M")
+        donnees = data[date_heure]
 
         pivot = donnees.pivot(index='y',columns='x',values='estimation')
         precip_reshape = pivot.values
@@ -975,10 +1070,6 @@ def figures_periode(data_calcul, radar_grid, emplacements_pluvios, donnees_pluvi
         valeurs_pluvio = pluvio_xyz.copy()
         valeurs_pluvio['precip'] = data_pluvio
 
-        if np.all(precip_reshape == 0):
-            print(f"Carte ignorée (aucune pluie) : {date_heure}")
-            continue
-
         #FIGURE : Carte de precip - krigeage avec derive externe
         fig, ax = plt.subplots(figsize=(8,6))
         pcm = ax.pcolormesh(x, y, masked_precip, shading='auto', cmap=cmap, norm=norm, alpha=0.7)
@@ -994,25 +1085,29 @@ def figures_periode(data_calcul, radar_grid, emplacements_pluvios, donnees_pluvi
 
         ax.scatter(valeurs_pluvio['X'], valeurs_pluvio['Y'],
                     color=station_couleurs, edgecolor='black',s=80)
+        
+        #contour_nick.boundary.plot(ax=ax, color="black", linewidth=1)
+        #contour_wilson.boundary.plot(ax=ax, color="black", linewidth=1)
+        
         cbar = fig.colorbar(pcm, ax=ax)
         cbar.set_label("Pluie (mm)")
-        plt.show(fig)
 
         #Pour ajouter une basemap :
-        ctx.add_basemap(ax,crs="EPSG:32187",source=ctx.providers.OpenStreetMap.Mapnik)
-
+        #ctx.add_basemap(ax,crs="EPSG:32187",source=ctx.providers.OpenStreetMap.Mapnik)
+        ctx.add_basemap(ax,crs="EPSG:32187",source=ctx.providers.CartoDB.Voyager)
         #Pour ajouter l'ortho photo :
         #ctx.add_basemap(ax,crs="EPSG:32187",source=ctx.providers.Esri.WorldImagery)
+        plt.show()
 
         #Enregistrer les figures
-        if save_figures :
+        if chemin_figures is not None:
             nom_fichier = f"carte_{date_str}.png"
-            fig.savefig(os.path.join(chemin_figures, nom_fichier), dpi=300)
+            fig.savefig(chemin_figures / nom_fichier, dpi=300)
         plt.close(fig)
 
         #FIGURE : Comparaison observation vs calculs
-        dist = cdist(coords_stations, coords_grille) #Distance entre station et grille
-        idx = np.argmin(dist, axis=1) #Indice du point grille le plus proche
+        if comparaison not in [0, 1]:
+            raise ValueError("Le paramètre 'comparaison' doit être 0 ou 1")
 
         if comparaison == 1 :
             estim_result = donnees['estimation'].values
@@ -1022,20 +1117,15 @@ def figures_periode(data_calcul, radar_grid, emplacements_pluvios, donnees_pluvi
             df_comparaison['diff'] = np.abs(df_comparaison['obs'] - df_comparaison['estim'])
 
             fig2, ax2 = plt.subplots(figsize=(10, 4))
-            df_comparaison.plot(y=['obs', 'estim'], kind='bar', figsize=(10,4))
+            df_comparaison.plot(y=['obs', 'estim'], kind='bar', ax=ax2)
             ax2.set_title("Comparaison des données observées et estimées")
             ax2.set_ylabel("Précipitation (mm)")
             plt.tight_layout()
 
-            if save_figures:
+            if chemin_figures:
                 nom_fichier = f"comparaison_{date_str}.png"
-                fig2.savefig(os.path.join(chemin_figures, nom_fichier),dpi=300)
+                fig2.savefig(chemin_figures / nom_fichier, dpi=300)
             plt.close(fig2)
-
-        elif comparaison == 0 :
-            pass
-        else :
-            raise ValueError("Le parametre 'comparaison' doit être 0 ou 1")
 
     return
 
@@ -1044,23 +1134,25 @@ def video_precip(chemin_figures, date_debut, date_fin, format_video, prefixe="ca
     """
     Parameters
     ----------
-    chemin_figures : Chaine de caracteres
+    chemin_figures : str
         Chemin vers le dossier ou les figures sont enregistrees
-    date_debut : chaine de caracteres
-        Date du debut de la periode, avec un format comme cet exemple : "2025-05-17 13:30:00"
-    date_fin : chaine de caracteres
-        Date de la fin de la periode, avec un format comme cet exemple : "2025-05-17 13:30:00"
-    prefixe : chaine de caracteres (Optionnel)
+    date_debut : str
+        Date de debut de la periode d'interet au format 'YYYY-MM-DD'
+    date_fin : str
+        Date de fin de la periode d'interet au format 'YYYY-MM-DD'
+    prefixe : str (optionnel)
         Par default le prefixe est "carte_"
-    fps : int (Optionnel)
-        Vitesse de defilement, par default c'est 3 frames per second
+    fps : int (optionnel)
+        Vitesse de defilement. Par default 3 images par seconde
     format_video : chaine de caractere
-        Les choix de format video sont : "gif" et "mp4"
+        Format de la video : "gif" et "mp4"
 
     Returns
     -------
     None
     """
+    chemin_figures = Path(chemin_figures)
+    
     date_debut = pd.Timestamp(date_debut)
     date_fin = pd.Timestamp(date_fin)
 
@@ -1073,11 +1165,10 @@ def video_precip(chemin_figures, date_debut, date_fin, format_video, prefixe="ca
                  f"{format_video}")
 
     fichiers = []
-    for fichier in os.listdir(chemin_figures):
-        if not (fichier.startswith(prefixe) and fichier.endswith(".png")):
-            continue
+    for fichier in chemin_figures.glob(f"{prefixe}*.png"):
         try:
-            date_fichier = pd.to_datetime(fichier.replace(prefixe, "").replace(".png", ""),format="%Y%m%d_%H%M")
+            date_fichier = pd.to_datetime(fichier.replace(prefixe, "")
+                            .replace(".png", ""),format="%Y%m%d_%H%M")
         except Exception:
             continue
         if date_debut <= date_fichier <= date_fin:
@@ -1087,18 +1178,18 @@ def video_precip(chemin_figures, date_debut, date_fin, format_video, prefixe="ca
     if len(fichiers) == 0:
         raise ValueError("Aucune image trouvee dans la periode demandee")
 
-    chemin_video = os.path.join(chemin_figures, nom_video)
+    chemin_video = chemin_figures / nom_video
 
     if format_video == "mp4" :
         with imageio.get_writer(chemin_video, fps=fps, codec="libx264", macro_block_size=None) as writer:
             for _, fichier in fichiers:
-                image = imageio.imread(os.path.join(chemin_figures, fichier))
+                image = imageio.imread(fichier)
                 writer.append_data(image)
-    else : #donc gif
+    else : #GIF
         images = []
         for _, fichier in fichiers:
-            img = imageio.imread(os.path.join(chemin_figures, fichier))
-            images.append(img)
+            image = imageio.imread(fichier)
+            images.append(image)
         imageio.mimsave(chemin_video, images, fps=fps)
 
     print(f"Video creee : {chemin_video}")
@@ -1106,42 +1197,52 @@ def video_precip(chemin_figures, date_debut, date_fin, format_video, prefixe="ca
     return
 
 
-def format_pcswmm(index_garde, chemin_resultats, chemin_timeseries):
+index_wilson = (list(range(644, 648)) + list(range(681, 686)) +
+                list(range(717, 723)) + list(range(755, 761)) +
+                list(range(793, 798)))
+
+index_nick = (list(range(547, 550)) + list(range(584, 588)) +
+              list(range(622, 627)) + list(range(659, 666)) +
+              list(range(698, 703)) + list(range(735, 740)) +
+              list(range(773, 777)) + list(range(810, 813)) +
+              list(range(847, 849)))
+
+def format_pcswmm(index_garde, chemin_krig, chemin_timeseries):
     """
     Parameters
     ----------
     index_garde : list
-        Liste des ID des cases de la radar_grid que l'on veut garder
-        *Facilement identifiable sur PCSWMM avec le shapefile de la grille
-    chemin_resultats : chaine de caracteres
-        Chemin vers le fichier .pkl, un dictionnaire contenant des dataframes :
-        Un df par pas de temps, les ID des cases de la grille radar en index
+        Liste des ID des cases de la grille d'interpolation que l'on veut garder
+        Facilement identifiables sur PCSWMM avec le shapefile de la grille
+    chemin_krig : str
+        Chemin vers le fichier PKL contenant un dictionnaire de Dataframes:
+        un df par pas de temps, les ID des cases de la grille en index et
         les colonnes sont "x", "y", "estimation" et "variance"
-    chemin_timeseries : chaine de caracteres
-        Chemin ou le fichier .csv sera enregistre. PCSWMM prend ce format de fichier.
+    chemin_timeseries : str
+        Chemin ou le fichier CSV sera enregistre. 
+        PCSWMM prend ce format de fichier.
 
     Returns
     -------
-    timeseries_estim : DataFrame
-        index : serie de pas de temps
-        colonnes : les ID des cases couvrants la region etudiee
-        valeurs : precipitation en mm
+    timeseries_estim : pandas.DataFrame
+        Index : serie de pas de temps
+        Colonnes : ID des cases couvrants la region etudiee
+        Valeurs : precipitation en mm
     """
-    # Ouvrir le dictionnaire avec les dataframes de chaque pas de temps
-    with open(chemin_resultats, "rb") as f:
+    with open(chemin_krig, "rb") as f:
         resultats = pickle.load(f)
-    
-    # Couper la grille pour garder seulement la region etudiee
-    for key, df in resultats.items():
-        idx = sorted(i for i in index_garde if i in df.index)
-        resultats[key] = df.loc[idx]
-    
+
+    #Couper la grille pour garder seulement la region etudiee
+    resultats = {temps: df.loc[df.index.intersection(index_garde)]
+                 for temps, df in resultats.items()}
+
     timeseries = pd.concat(resultats, names=["Temps", "points"])
 
     timeseries_estim = timeseries["estimation"].unstack("points")
-    timeseries_estim = timeseries_estim.fillna(0)                      #Remplacer les nan par 0 pour PCSWMM
-    timeseries_estim = timeseries_estim.clip(lower=0)                  #Mettre les valeurs negatives a zero
+    timeseries_estim = timeseries_estim.fillna(0) #Remplacer les nan par 0 pour PCSWMM
+
     timeseries_estim.index = pd.to_datetime(timeseries_estim.index)
+    timeseries_estim.index = timeseries_estim.index.strftime("%m/%d/%Y %H:%M")
 
     timeseries_estim.to_csv(chemin_timeseries)
 
