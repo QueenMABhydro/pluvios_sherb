@@ -28,24 +28,23 @@ Ville de Sherbrooke.
 
 @author: Marie-Amelie Boucher, USherbrooke
 """
-import os
-from pathlib import Path
 import pickle
+from pathlib import Path
+from datetime import datetime
+import contextily as ctx
 import earthaccess
-import xarray as xr
+import imageio.v2 as imageio
+import matplotlib.cm as cm
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from datetime import datetime
+import xarray as xr
+from matplotlib.colors import LinearSegmentedColormap, PowerNorm
+from pykrige import OrdinaryKriging, UniversalKriging
+from pyproj import Transformer
+from scipy.spatial import cKDTree
 from scipy.spatial.distance import cdist
 from scipy.stats import linregress
-from pyproj import Transformer
-from pykrige import OrdinaryKriging, UniversalKriging
-from scipy.spatial import cKDTree
-import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-from matplotlib.colors import LinearSegmentedColormap, PowerNorm
-import contextily as ctx
-import imageio.v2 as imageio
 
 def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pasdetemps):
     """
@@ -58,7 +57,7 @@ def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pasdetemps
         Chemin du fichier CSV de sortie contenant la serie temporelle complete
     date_debut : str
         Date de debut de la periode d'interet au format 'YYYY-MM-DD'
-    date_fin : cstr
+    date_fin : str
         Date de fin de la periode d'interet au format 'YYYY-MM-DD'
     pasdetemps : str
         Resolution temporelle des donnees : "5min" ou "1h"
@@ -69,30 +68,36 @@ def ajoute_manquantes(fichier_o, fichier_modif, date_debut, date_fin, pasdetemps
         Serie temporelle complete sur la periode demandee
         Les dates manquantes sont ajoutees et leurs valeurs sont remplies avec NaN
     """
+    fichier_o = Path(fichier_o) 
+    fichier_modif = Path(fichier_modif)
+    fichier_modif.parent.mkdir(parents=True, exist_ok=True) #Creer fichier si n'existe pas
+    
     df = pd.read_csv(fichier_o, sep=';')
 
     if str(df.iloc[-1, 0]).strip().upper() == "TOTAL":
         df = df.iloc[:-1]
 
     df['Date'] = pd.to_datetime(df['Date'], format='%Y-%m-%d', errors='coerce')
-    df = df.set_index('Date')
 
     if pasdetemps == "5min":
-        df.index = pd.to_datetime(
-            df.index.date.astype(str) + ' ' + df['Période'].str.split(' à ').str[0])
-        df = df.drop(columns='Période')
+        df["Date"] = pd.to_datetime( 
+            df["Date"].dt.strftime("%Y-%m-%d") + " " + 
+            df["Période"].str.split(" à ").str[0] ) 
+        df = df.drop(columns="Période")
 
     elif pasdetemps == "1h" :
         df['Heure'] = df['Période'].str.extract(r'(\d{1,2})h')[0].str.zfill(2) + ':00:00'
         df['Date'] = pd.to_datetime(df['Date'].dt.strftime('%Y-%m-%d') + ' ' + df['Heure'])
-        df = df.set_index('Date')
         df = df.drop(columns=['Période', 'Heure'])
 
     else :
-        raise ValueError(f"pasdetemps='{pasdetemps}' non supporté. "
+        raise ValueError(f"pasdetemps='{pasdetemps}' non supporté."
             "Utiliser '5min' ou '1h'.")
 
-    serie_index = pd.date_range(start= date_debut , end= date_fin, freq= pasdetemps)
+    df = df.set_index('Date')
+    df = df.apply(pd.to_numeric, errors='coerce')
+
+    serie_index = pd.date_range(start= date_debut, end= date_fin, freq= pasdetemps)
 
     donnees_pluvio_complet = df.reindex(serie_index)
 
@@ -119,7 +124,7 @@ def single_raingauge_metadata(precip_complete, emplacements_pluvios, dossier_sor
     Returns
     -------
     metadata_df : pandas.DataFrame
-        Tableau des metadonnees : station_id, latitude, longitude, 
+        Tableau des metadonnees : station_id, latitude, longitude,
         start_datetime, end_datetime et path
     """
     #Donnees de precipitations
@@ -134,8 +139,8 @@ def single_raingauge_metadata(precip_complete, emplacements_pluvios, dossier_sor
 
     #Creer le dossier de sortie
     dossier_sortie = Path(dossier_sortie)
-    dossier_sortie.mkdir(exist_ok=True)
-    
+    dossier_sortie.mkdir(parents=True, exist_ok=True)
+
     fichier_metadata = dossier_sortie / "precip_complete_metadata.csv"
     metadata_list = []
 
@@ -166,7 +171,7 @@ def telechargement_gpm(dossier_auth, dossier_download, date_debut, date_fin, bou
     """
     Parameters
     ----------
-    dossier_auth : str
+    dossier_auth : str 
         Chemin vers le dossier contenant les fichiers d'authentification EarthData
         (.edl_token, .urs_cookies et .dodsrc) Le dossier est cree s'il n'existe pas
     dossier_download : str
@@ -176,20 +181,20 @@ def telechargement_gpm(dossier_auth, dossier_download, date_debut, date_fin, bou
         Date de debut de la periode d'interet au format 'YYYY-MM-DD'
     date_fin : str
         Date de fin de la periode d'interet au format 'YYYY-MM-DD'
-    bounding_box : Tuple
+    bounding_box : tuple
         Limites spatiales de la zone d'etude :
             (longitude_min, latitude_min, longitude_max, latitude_max)
             #bounding_box = (-72.413, 45.022, -71.507, 45.697)
 
     Returns
     -------
-    fichier_nc : Chaine de caractere
+    fichier_nc : str
         Chemin complet vers le fichier NetCDF cree
 
     Notes
     ------
-    - Le produit utilise : GPM IMERG Half Hourly Final Run (GPM_3IMERGHH),
-    - Version 07
+    - Produit : GPM IMERG Half Hourly Final Run (GPM_3IMERGHH),
+    - Version : 07
     - Resolution temporelle : 30 minutes
     """
     dossier_auth = Path(dossier_auth).resolve()
@@ -209,7 +214,7 @@ def telechargement_gpm(dossier_auth, dossier_download, date_debut, date_fin, bou
                          "Voulez-vous l'ecraser? (Oui/Non) : ")
         if reponse.lower() == "oui" :
             print("L'ancien fichier est supprime")
-            os.remove(fichier_nc)
+            fichier_nc.unlink()
         elif reponse.lower() == "non":
             print("Telecharement annule")
             return fichier_nc
@@ -281,7 +286,7 @@ def formater_gpm(fichier_nc, chemin_resultats):
 
     Returns
     -------
-    donnees_proj : dictionnaire
+    donnees_proj : dict
         Dictionnaire contenant les coordonnees geographiques et projetees,
         ainsi qu'un dictionnaire de grilles de precipitation par pas de temps.
     """
@@ -306,7 +311,7 @@ def formater_gpm(fichier_nc, chemin_resultats):
 
     #Grille geographique
     lon_grid, lat_grid = np.meshgrid(lon, lat)
-    transformer = Transformer.from_crs("EPSG:4326", "EPSG:32187", always_xy=True)
+    transformer = Transformer.from_crs("EPSG:4326", "EPSG:2144", always_xy=True)
     x, y = transformer.transform(lon_grid, lat_grid)
 
     #Organiser les donnees
@@ -323,14 +328,14 @@ def formater_gpm(fichier_nc, chemin_resultats):
     return donnees_gpm
 
 
-def krig_pluvio(grille_interp, emplacements_pluvios, donnees_pluvios, 
+def krig_pluvio(grille_interp, emplacements_pluvios, donnees_pluvios,
                 chemin_resultats, derive = None, donnees_derive = None):
     """
     Parameters
     ----------
     grille_interp : str
         Chemin vers le fichier CSV des coordonnees de la grille d'interpolation
-        (*radar_grid_xyz.csv)
+        (*grille_interp.csv)
     emplacements_pluvios : str
         Chemin vers le fichier CSV des coordonnees des pluviometres en metre
         (*pluvio_xyz.csv)
@@ -343,14 +348,14 @@ def krig_pluvio(grille_interp, emplacements_pluvios, donnees_pluvios,
         - None : krigeage ordinaire
         - "altitude" : krigeage avec comme derive externe l'altitude
         - "gpm" : krigeage avec derive externe les precipitations de GPM
-    donnees_gpm : str (optionnel)
+    donnees_derive : str (optionnel)
         Chemin vers le dictionnaire PKL contenant les donnees GPM reprojetees
 
     Returns
     -------
-    resultats : Dictionnaire
+    resultats : dict
         Dictionnaire contenant un DataFrame par pas de temps.
-        Chaque df a contient les colonnes x, y, estimation et variance
+        Chaque df contient les colonnes x, y, estimation et variance
     """
     if isinstance(derive, str):
         derive = derive.lower()
@@ -358,8 +363,8 @@ def krig_pluvio(grille_interp, emplacements_pluvios, donnees_pluvios,
             derive = None
     if derive not in [None, "altitude", "gpm"]:
         raise ValueError("derive doit etre None, 'altitude' ou 'gpm'")
-  
-    #Grille d'interpolation (500x500m)
+
+    #Grille d'interpolation (500 x 500 m)
     grille_interp = (pd.read_csv(grille_interp).set_index("id")[["X", "Y", "ELEV_1"]]
         .rename(columns={"ELEV_1": "Z"}).apply(pd.to_numeric))
     grille_interp[['X','Y','Z']] = np.floor(grille_interp[['X','Y','Z']]*10**6)/10**6
@@ -374,12 +379,12 @@ def krig_pluvio(grille_interp, emplacements_pluvios, donnees_pluvios,
     pluvio_xyz[['X','Y','Z']] = np.floor(pluvio_xyz[['X','Y','Z']]*10**6)/10**6
 
     #Donnees de precipitations
-    donnees_pluvios = pd.read_csv(donnees_pluvios, index_col=0, 
+    donnees_pluvios = pd.read_csv(donnees_pluvios, index_col=0,
                                   parse_dates=True).apply(pd.to_numeric)
     donnees_pluvios.index.name = "Temps"
 
     stations = donnees_pluvios.columns.values
-    
+
     #Derive GPM
     if derive == "gpm":
         donnees_pluvios = donnees_pluvios.resample("30min").sum()
@@ -393,7 +398,7 @@ def krig_pluvio(grille_interp, emplacements_pluvios, donnees_pluvios,
 
         if len(temps) == 0:
             raise ValueError("Aucun pas de temps commun entre les pluviometres et GPM")
-        
+
         #Grille GPM
         df_gpm = donnees_gpm[temps_gpm[0]]
         gpm_xy = df_gpm[["x", "y"]].values
@@ -408,7 +413,7 @@ def krig_pluvio(grille_interp, emplacements_pluvios, donnees_pluvios,
         #Associer GPM et grille radar
         radar_xy = np.column_stack((gx, gy))
         _, indices_gpm_radar = tree_gpm.query(radar_xy)
-    
+
     else : #KO et KDE altitude gardent tous les 5 min
         temps = donnees_pluvios.index
 
@@ -416,12 +421,12 @@ def krig_pluvio(grille_interp, emplacements_pluvios, donnees_pluvios,
     resultats = {}
     for t in temps :
         precip = donnees_pluvios.loc[t, stations].values
-        
+
         result_t = pd.DataFrame({"x":gx, "y":gy, "z":gz, "estimation":np.nan, "variance":np.nan},
                                 index= grille_interp.index)
 
         masque = ~np.isnan(precip)
-        
+
         if np.sum(masque) == 0: #Aucune observation dispo
             resultats[t] = result_t
             continue
@@ -442,11 +447,11 @@ def krig_pluvio(grille_interp, emplacements_pluvios, donnees_pluvios,
 
         if derive is None :
             #Krigeage ordinaire
-            ok = OrdinaryKriging(x_val,y_val,precip[masque],                  
+            ok = OrdinaryKriging(x_val,y_val,precip[masque],
                     variogram_model='spherical', nlags=5)
 
             estim, var = ok.execute("points", gx, gy)
-        
+
         elif derive == "altitude":
             #Krigeage avec derive externe l'altitude
             uk = UniversalKriging(x_val, y_val, precip[masque],
@@ -461,7 +466,7 @@ def krig_pluvio(grille_interp, emplacements_pluvios, donnees_pluvios,
             gpm_values = donnees_gpm[t]["estimation"].values
             gpm_station = gpm_values[indices_gpm_pluvio[masque]]
             gpm_radar = gpm_values[indices_gpm_radar]
-            
+
             uk = UniversalKriging(x_val, y_val, precip[masque],
                 variogram_model='spherical', nlags=5,
                 drift_terms=['specified'], specified_drift = [gpm_station],
@@ -484,28 +489,47 @@ def krig_pluvio(grille_interp, emplacements_pluvios, donnees_pluvios,
 
 
 def tracer_variogrammes(emplacements_pluvios, donnees_pluvios, date_debut, date_fin, chemin_figures=None):
+    """
+    Parameters
+    ----------
+    emplacements_pluvios : str
+        Chemin vers le fichier CSV des coordonnees des pluviometres en metre
+        (*pluvio_xyz.csv)
+    donnees_pluvios : str
+        Chemin vers le fichier CSV des precipitations de toutes les stations
+        (*precip_complete.csv)
+    date_debut : str
+        Date de debut de la periode d'interet au format 'YYYY-MM-DD'
+    date_fin : str
+        Date de fin de la periode d'interet au format 'YYYY-MM-DD'
+    chemin_figures : str (optionnel)
+        Chemin vers le dossier ou les figures sont enregistrees en format png
+
+    Returns
+    -------
+    resultats : pandas.DataFrame
+        DataFrame contenant les parametres (plateau, portee, effet de pepite)
+        des variogrammes et le R² pour chaque pas de temps
+    """
     if chemin_figures is not None:
-        os.makedirs(chemin_figures, exist_ok=True)
-        chemin_parametres = os.path.join(chemin_figures, "parametres_variogrammes.txt")
+        chemin_figures = Path(chemin_figures)
+        chemin_figures.mkdir(parents=True, exist_ok=True)
+        chemin_parametres = (chemin_figures / "parametres_variogrammes.txt")
         fichier_parametres = open(chemin_parametres, "w", encoding="utf-8")
     else:
         fichier_parametres = None
 
-    # Coordonnees xyz des pluviometres
-    pluvio_xyz = pd.read_csv(emplacements_pluvios)
-    pluvio_xyz = pluvio_xyz.set_index('SONDEID')
-    pluvio_xyz = pluvio_xyz[['X','Y','ELEV_1']]
-    pluvio_xyz = pluvio_xyz.rename(columns={'ELEV_1': 'Z'})
-    pluvio_xyz = pluvio_xyz.apply(pd.to_numeric)
+    #Coordonnees des pluviometres
+    pluvio_xyz = (pd.read_csv(emplacements_pluvios).set_index("SONDEID")[["X", "Y", "ELEV_1"]]
+        .rename(columns={"ELEV_1": "Z"}).apply(pd.to_numeric))
     pluvio_xyz[['X','Y','Z']] = np.floor(pluvio_xyz[['X','Y','Z']]*10**6)/10**6
 
-    # Donnees pluviometres
-    donnees_pluvios = pd.read_csv(donnees_pluvios)
-    donnees_pluvios = donnees_pluvios.set_index('Unnamed: 0')
-    donnees_pluvios = donnees_pluvios.rename_axis('Temps')
-    donnees_pluvios.index = pd.to_datetime(donnees_pluvios.index)
-    donnees_pluvios = donnees_pluvios.apply(pd.to_numeric)
+    #Donnees de precipitations
+    donnees_pluvios = pd.read_csv(donnees_pluvios, index_col=0,
+                                  parse_dates=True).apply(pd.to_numeric)
+    donnees_pluvios.index.name = "Temps"
 
+    #Periode d'interet
     date_debut = pd.Timestamp(date_debut)
     date_fin = pd.Timestamp(date_fin)
     if date_fin < date_debut:
@@ -515,6 +539,7 @@ def tracer_variogrammes(emplacements_pluvios, donnees_pluvios, date_debut, date_
     stations = donnees_pluvios.columns.values
     temps = donnees_pluvios.index
 
+    #Variogrammes
     resultats = []
     for t in temps :
         print(f"Date : {t}")
@@ -532,12 +557,12 @@ def tracer_variogrammes(emplacements_pluvios, donnees_pluvios, date_debut, date_
             x = np.array([pluvio_xyz.loc[st, 'X'] for st in stations])
             y = np.array([pluvio_xyz.loc[st, 'Y'] for st in stations])
             z = np.array([pluvio_xyz.loc[st, 'Z'] for st in stations])
-            
+
             uk = UniversalKriging(x, y, precip, variogram_model='spherical',
                 nlags=5, drift_terms=['specified'], specified_drift=[z],
                 verbose=False, enable_plotting=False, pseudo_inv=True)
             """
-            krig = OrdinaryKriging(x, y, precip,variogram_model='spherical',
+            ko = OrdinaryKriging(x, y, precip,variogram_model='spherical',
                                    nlags=5, enable_plotting=False, verbose=False,
                                    enable_statistics=False, coordinates_type='euclidean',
                                    pseudo_inv=True, weight=False)
@@ -566,7 +591,7 @@ def tracer_variogrammes(emplacements_pluvios, donnees_pluvios, date_debut, date_
                 nugget + partial_sill *(1.5 * h / vrange - 0.5 * (h / vrange) ** 3),
                 sill_total)
 
-            #R^2
+            #R²
             gamma_interp = np.interp(lags, h, gamma)
             y_obs = semivariance
             y_pred = gamma_interp
@@ -581,10 +606,10 @@ def tracer_variogrammes(emplacements_pluvios, donnees_pluvios, date_debut, date_
                 r2 = np.nan
 
             if fichier_parametres:
-                fichier_parametres.write(f"R^2 : {r2}\n")
+                fichier_parametres.write(f"R² : {r2}\n")
 
             resultats.append({"temps": t, "partial_sill": partial_sill,
-                              "range": vrange, "nugget": nugget, "r2": r2})
+                              "range": vrange, "nugget": nugget, "R²": r2})
 
             # Figures
             fig, ax = plt.subplots(figsize=(8, 5))
@@ -613,7 +638,7 @@ def tracer_variogrammes(emplacements_pluvios, donnees_pluvios, date_debut, date_
             # Enregistrer les figures
             if chemin_figures is not None:
                 nom_fichier = f"variogramme_{t:%Y%m%d_%H%M}.png"
-                chemin_fichier = os.path.join(chemin_figures, nom_fichier)
+                chemin_fichier = (chemin_figures / nom_fichier)
                 plt.savefig(chemin_fichier, dpi=200, bbox_inches="tight")
 
             plt.show()
