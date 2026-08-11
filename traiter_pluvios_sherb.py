@@ -3,26 +3,30 @@
 """
 Created on Tue Nov 18 15:45:46 2025
 
-Fonctions pour traiter les donnees brutes des pluviometres de la
-Ville de Sherbrooke.
-- "ajoute_manquantes": Ajouter explicitement les donnees manquantes
-- "single_raingauge_metadata" : Creer un fichier des precipitations completes
-    propre a chaque pluviometre ainsi que le fichier metadata utiliser par le module rainfallQC
+Fonctions pour traiter les donnees brutes des pluviometres de la Ville de Sherbrooke
 
-- "telecharger_gpm" : Telecharger des donnees de precipitation GPM IMERG demi-horaires
+- "ajoute_manquantes": Ajouter explicitement les donnees manquantes afin d'obtenir
+    une serie temporelle complete
+- "single_raingauge_metadata" : Creer, pour chaque pluviometre, un fichier de precipitations
+    completes ainsi que le fichier metadata utilise par le module RainfallQC
+
+- "telecharger_gpm" : Telecharger les donnees de precipitation GPM IMERG demi-horaires
     (GPM_3IMERGHH) depuis EarthData, puis decouper la grille selon la zone d'etude
-- "formater_gpm" : Reprojeter les coordonnees, ajuster le decalage horaire et 
-    selectionner les variables
+- "formater_gpm" : Reprojeter les coordonnees, ajuster le decalage horaire et
+    selectionner les variables necessaires
 - "krig_pluvio" : Effectuer un krigeage ordinaire, un krigeage avec l'altitude comme
-    derive ou un krigeage avec des donnees satellitaires comme derive
+    derive externe ou un krigeage avec des donnees satellitaires comme derive externe
+- "tracer_variogramme" : Calculer et tracer les variogrammes experimentaux et les
+    modeles theoriques ajustes pour chaque pas de temps
 
-- "tracer_variogrammes" : Tracer les variogrammes afin d'en valider la performance
-- "valid_krig_pluvios" : Valider les resultats du krigeage en calculant des erreurs absolues, 
-    erreurs relatives, RMSE, MAE
+- "valid_krig_pluvio" : Valider le krigeage en calculant les erreurs absolues, 
+    relatives, RMSE et MAE
+- "valid_altitude" : Valider la correlation entre l'altitude et les precipitations
 
-- "figures_periode" : Tracer une carte radar pour un seul pas de temps
+- "figures_periode" : Tracer une carte des precipitations interpolees pour 
+    chaque pas de temps de la periode etudiee
     Option : Tracer des figures comparant les obsevations et les valeurs estimees
-- "video_precip" : Faire un video mp4 ou gif a partir d'un ensemble de figures
+- "video_precip" : Creer une video (MP4 ou GIF) a partir d'une serie de figures
 
 - "format_pcswmm" : Formater les resulats pour les rendre compatibles avec PCSWMM
 
@@ -33,6 +37,7 @@ from pathlib import Path
 from datetime import datetime
 import contextily as ctx
 import earthaccess
+import geopandas as gpd
 import imageio.v2 as imageio
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
